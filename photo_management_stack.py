@@ -17,6 +17,7 @@ from aws_cdk import (
     aws_route53 as route53,
     aws_route53_targets as route53_targets,
     aws_s3 as s3,
+    aws_s3_notifications as s3n,
     aws_ses as ses,
     aws_ssm as ssm,
 )
@@ -44,6 +45,16 @@ class PhotoManagementStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        photos_table.add_global_secondary_index(
+            index_name="ByTakenAt",
+            partition_key=dynamodb.Attribute(
+                name="entity_type", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="taken_at", type=dynamodb.AttributeType.NUMBER
+            ),
+        )
+
         login_tokens_table = dynamodb.Table(
             self,
             "LoginTokensTable",
@@ -61,6 +72,19 @@ class PhotoManagementStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             encryption=s3.BucketEncryption.S3_MANAGED,
             versioned=True,
+            cors=[
+                s3.CorsRule(
+                    allowed_methods=[
+                        s3.HttpMethods.PUT,
+                        s3.HttpMethods.GET,
+                        s3.HttpMethods.HEAD,
+                    ],
+                    allowed_origins=[f"https://{CUSTOM_DOMAIN}"],
+                    allowed_headers=["*"],
+                    exposed_headers=["ETag"],
+                    max_age=3000,
+                ),
+            ],
             lifecycle_rules=[
                 s3.LifecycleRule(
                     noncurrent_version_expiration=Duration.days(30),
@@ -112,6 +136,8 @@ class PhotoManagementStack(Stack):
             environment={
                 "COOKIE_SECRET_SSM_PARAM": COOKIE_SECRET_SSM_PARAM,
                 "LOGIN_TOKENS_TABLE": login_tokens_table.table_name,
+                "PHOTOS_TABLE": photos_table.table_name,
+                "PHOTOS_BUCKET": photos_bucket.bucket_name,
                 "ADMIN_EMAILS": ADMIN_EMAILS,
                 "FROM_EMAIL": FROM_EMAIL,
                 "BASE_URL": f"https://{CUSTOM_DOMAIN}",
@@ -119,6 +145,34 @@ class PhotoManagementStack(Stack):
         )
 
         login_tokens_table.grant_read_write_data(fn)
+        photos_table.grant_read_data(fn)
+        photos_bucket.grant_read_write(fn)
+
+        derivatives_fn = _lambda.DockerImageFunction(
+            self,
+            "DerivativesFunction",
+            code=_lambda.DockerImageCode.from_image_asset(
+                docker_dir,
+                file="Dockerfile.derivatives",
+                platform=docker_platform,
+            ),
+            architecture=arch,
+            memory_size=2048,
+            timeout=Duration.minutes(2),
+            environment={
+                "PHOTOS_TABLE": photos_table.table_name,
+                "PHOTOS_BUCKET": photos_bucket.bucket_name,
+            },
+        )
+
+        photos_table.grant_write_data(derivatives_fn)
+        photos_bucket.grant_read_write(derivatives_fn)
+
+        photos_bucket.add_event_notification(
+            s3.EventType.OBJECT_CREATED,
+            s3n.LambdaDestination(derivatives_fn),
+            s3.NotificationKeyFilter(prefix="originals/"),
+        )
 
         fn.add_to_role_policy(
             iam.PolicyStatement(

@@ -70,6 +70,7 @@ I can drag one or more photos onto the Photos screen and they upload asynchronou
 3. An S3 `ObjectCreated` event triggers a derivatives Lambda, which generates the thumbnail and medium versions, extracts EXIF (taken date, camera type, ISO, aperture, shutter speed), and writes the Photo record to DynamoDB
 4. Once all Photo records exist, a **single** toast appears: `"N photo(s) uploaded. Add to album?"`
 5. Clicking "Add to album" opens a modal listing albums (cover thumbnail + title). Typing filters the list via a server-side substring search on album name. Selecting an album tags all N just-uploaded photos into that album.
+6. Once a photo is successfully uploaded refresh the gallery of photos on the screen.
 
 Notes:
 * One toast per batch, not one per photo

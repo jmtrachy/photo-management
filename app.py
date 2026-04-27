@@ -6,16 +6,20 @@ import time
 from pathlib import Path
 
 import boto3
-from fastapi import Depends, FastAPI, Form, Request
+from boto3.dynamodb.conditions import Key
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
+from pydantic import BaseModel
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
 LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
+PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
+PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
 ADMIN_EMAILS = {
@@ -27,11 +31,22 @@ ADMIN_EMAILS = {
 SESSION_COOKIE = "session"
 SESSION_MAX_AGE_SECONDS = 30 * 24 * 3600
 TOKEN_TTL_SECONDS = 15 * 60
+PRESIGN_PUT_TTL_SECONDS = 15 * 60
+THUMB_GET_TTL_SECONDS = 60 * 60
+PHOTO_PAGE_LIMIT = 200
+
+CONTENT_TYPE_TO_EXT = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
 
 ssm = boto3.client("ssm")
 ses = boto3.client("ses")
+s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
+photos_table = dynamodb.Table(PHOTOS_TABLE)
 
 _serializer: URLSafeTimedSerializer | None = None
 
@@ -150,9 +165,77 @@ async def index(_email: str = Depends(require_admin)):
     return _INDEX_HTML
 
 
+class PresignFile(BaseModel):
+    filename: str
+    content_type: str
+
+
+class PresignRequest(BaseModel):
+    files: list[PresignFile]
+
+
+@app.post("/api/uploads/presign")
+async def presign_uploads(
+    payload: PresignRequest, _email: str = Depends(require_admin)
+):
+    if not payload.files:
+        raise HTTPException(status_code=400, detail="No files supplied")
+    uploads = []
+    for f in payload.files:
+        ext = CONTENT_TYPE_TO_EXT.get(f.content_type)
+        if not ext:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported content type: {f.content_type}",
+            )
+        photo_id = secrets.token_hex(8)
+        key = f"originals/{photo_id}.{ext}"
+        url = s3_client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": key,
+                "ContentType": f.content_type,
+            },
+            ExpiresIn=PRESIGN_PUT_TTL_SECONDS,
+        )
+        uploads.append({"photo_id": photo_id, "key": key, "url": url})
+    logger.info(
+        json.dumps({"event": "presign_issued", "count": len(uploads)})
+    )
+    return {"uploads": uploads}
+
+
 @app.get("/api/photos")
 async def list_photos(_email: str = Depends(require_admin)):
-    return {"photos": [], "cursor": None}
+    resp = photos_table.query(
+        IndexName="ByTakenAt",
+        KeyConditionExpression=Key("entity_type").eq("PHOTO"),
+        ScanIndexForward=False,
+        Limit=PHOTO_PAGE_LIMIT,
+    )
+    photos = []
+    for item in resp.get("Items", []):
+        photo_id = item["photo_id"]
+        thumb_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": f"derivatives/{photo_id}/thumb.jpg",
+            },
+            ExpiresIn=THUMB_GET_TTL_SECONDS,
+        )
+        photos.append(
+            {
+                "photo_id": photo_id,
+                "thumb_url": thumb_url,
+                "taken_at": int(item.get("taken_at", 0)),
+                "uploaded_at": int(item.get("uploaded_at", 0)),
+                "width": int(item.get("width", 0)),
+                "height": int(item.get("height", 0)),
+            }
+        )
+    return {"photos": photos, "cursor": None}
 
 
 @app.get("/login", response_class=HTMLResponse)

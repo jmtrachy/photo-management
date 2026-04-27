@@ -11,6 +11,7 @@
       --muted: #888;
       --border: #e5e5e5;
       --card: #ffffff;
+      --accent: #2266dd;
     }
     * { box-sizing: border-box; }
     body {
@@ -20,7 +21,7 @@
       color: var(--fg);
     }
     header {
-      padding: 2rem 2rem 1.25rem;
+      padding: 1.5rem 2rem 1.25rem;
       border-bottom: 1px solid var(--border);
       background: var(--card);
       display: flex;
@@ -40,7 +41,40 @@
       text-decoration: none;
     }
     header a.signout:hover { color: var(--fg); text-decoration: underline; }
-    main { padding: 2rem; }
+
+    .toolbar {
+      padding: 0.75rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .upload-btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.45rem 1rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .upload-btn:hover { filter: brightness(1.1); }
+    .upload-hint {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .status {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    main { padding: 2rem; min-height: 50vh; }
+
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -50,13 +84,41 @@
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 6px;
+      overflow: hidden;
       aspect-ratio: 1;
+    }
+    .photo-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
     }
     .empty {
       color: var(--muted);
       font-style: italic;
       padding: 4rem 1rem;
       text-align: center;
+    }
+
+    .drop-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(34, 102, 221, 0.08);
+      border: 4px dashed var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 100;
+      visibility: hidden;
+    }
+    .drop-overlay.visible { visibility: visible; }
+    .drop-overlay span {
+      background: var(--card);
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      font-size: 1.2rem;
+      color: var(--accent);
     }
   </style>
 </head>
@@ -65,40 +127,186 @@
     <h1>Your Photographs</h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
+  <div class="toolbar">
+    <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
+    <span class="upload-hint">or drag photos anywhere on this page</span>
+    <span id="status" class="status"></span>
+    <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+  </div>
   <main>
     <div id="grid" class="grid" hidden></div>
     <div id="empty" class="empty" hidden>No photos yet.</div>
     <div id="loading" class="empty">Loading…</div>
   </main>
+  <div id="drop-overlay" class="drop-overlay">
+    <span>Drop to upload</span>
+  </div>
   <script>
-    async function loadPhotos() {
-      const grid = document.getElementById("grid");
-      const empty = document.getElementById("empty");
-      const loading = document.getElementById("loading");
+    const ACCEPT = new Set(["image/jpeg", "image/png", "image/webp"]);
 
+    const grid = document.getElementById("grid");
+    const empty = document.getElementById("empty");
+    const loading = document.getElementById("loading");
+    const statusEl = document.getElementById("status");
+    const uploadBtn = document.getElementById("upload-btn");
+    const fileInput = document.getElementById("file-input");
+    const dropOverlay = document.getElementById("drop-overlay");
+
+    let knownPhotoIds = new Set();
+
+    function setStatus(text) { statusEl.textContent = text || ""; }
+
+    function renderPhotos(photos) {
+      knownPhotoIds = new Set(photos.map(p => p.photo_id));
+      loading.hidden = true;
+      grid.innerHTML = "";
+      if (!photos.length) {
+        empty.hidden = false;
+        grid.hidden = true;
+        return;
+      }
+      empty.hidden = true;
+      grid.hidden = false;
+      for (const p of photos) {
+        const card = document.createElement("div");
+        card.className = "photo-card";
+        const img = document.createElement("img");
+        img.src = p.thumb_url;
+        img.alt = "";
+        img.loading = "lazy";
+        card.appendChild(img);
+        grid.appendChild(card);
+      }
+    }
+
+    async function fetchPhotos() {
+      const resp = await fetch("/api/photos");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      return data.photos || [];
+    }
+
+    async function refreshGallery() {
       try {
-        const resp = await fetch("/api/photos");
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-
-        loading.hidden = true;
-
-        if (!data.photos || data.photos.length === 0) {
-          empty.hidden = false;
-          return;
-        }
-
-        grid.hidden = false;
-        for (const _ of data.photos) {
-          const card = document.createElement("div");
-          card.className = "photo-card";
-          grid.appendChild(card);
-        }
+        renderPhotos(await fetchPhotos());
       } catch (err) {
         loading.textContent = `Failed to load photos: ${err.message}`;
       }
     }
-    loadPhotos();
+
+    refreshGallery();
+
+    uploadBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) handleFiles(Array.from(fileInput.files));
+      fileInput.value = "";
+    });
+
+    let dragDepth = 0;
+    function isFileDrag(e) {
+      return e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+    }
+
+    window.addEventListener("dragenter", (e) => {
+      if (!isFileDrag(e)) return;
+      dragDepth++;
+      dropOverlay.classList.add("visible");
+      e.preventDefault();
+    });
+    window.addEventListener("dragleave", () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropOverlay.classList.remove("visible");
+    });
+    window.addEventListener("dragover", (e) => {
+      if (isFileDrag(e)) e.preventDefault();
+    });
+    window.addEventListener("drop", (e) => {
+      dragDepth = 0;
+      dropOverlay.classList.remove("visible");
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length) handleFiles(files);
+    });
+
+    async function handleFiles(files) {
+      const accepted = files.filter(f => ACCEPT.has(f.type));
+      const rejected = files.length - accepted.length;
+      if (!accepted.length) {
+        setStatus(rejected ? `${rejected} unsupported file(s) skipped.` : "");
+        return;
+      }
+
+      setStatus(`Requesting upload URLs for ${accepted.length} photo(s)…`);
+      let uploads;
+      try {
+        const resp = await fetch("/api/uploads/presign", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            files: accepted.map(f => ({filename: f.name, content_type: f.type})),
+          }),
+        });
+        if (!resp.ok) throw new Error(`presign HTTP ${resp.status}`);
+        uploads = (await resp.json()).uploads;
+      } catch (err) {
+        setStatus(`Failed to get upload URLs: ${err.message}`);
+        return;
+      }
+
+      let done = 0;
+      const total = accepted.length;
+      const expectedIds = [];
+      const errors = [];
+      setStatus(`Uploading 0/${total}…`);
+
+      const uploadOne = async (file, info) => {
+        const r = await fetch(info.url, {
+          method: "PUT",
+          body: file,
+          headers: {"Content-Type": file.type},
+        });
+        if (!r.ok) throw new Error(`PUT ${file.name}: HTTP ${r.status}`);
+        expectedIds.push(info.photo_id);
+        done++;
+        setStatus(`Uploading ${done}/${total}…`);
+      };
+
+      await Promise.all(
+        accepted.map((f, i) => uploadOne(f, uploads[i]).catch(e => errors.push(e)))
+      );
+
+      if (errors.length) {
+        console.warn("Upload errors:", errors);
+        setStatus(`Uploaded ${done}/${total}. ${errors.length} failed. Processing…`);
+      } else {
+        setStatus(`Uploaded ${total}. Processing…`);
+      }
+
+      pollUntilProcessed(expectedIds);
+    }
+
+    async function pollUntilProcessed(ids) {
+      if (!ids.length) { setStatus(""); return; }
+      const TIMEOUT_MS = 60_000;
+      const INTERVAL_MS = 1500;
+      const start = Date.now();
+      while (true) {
+        await new Promise(r => setTimeout(r, INTERVAL_MS));
+        try {
+          const photos = await fetchPhotos();
+          renderPhotos(photos);
+          if (ids.every(id => knownPhotoIds.has(id))) {
+            setStatus("");
+            return;
+          }
+        } catch (_e) {}
+        if (Date.now() - start > TIMEOUT_MS) {
+          setStatus("Some photos still processing…");
+          return;
+        }
+      }
+    }
   </script>
 </body>
 </html>
