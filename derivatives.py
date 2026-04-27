@@ -5,6 +5,7 @@ import os
 import time
 import urllib.parse
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import boto3
 from PIL import ExifTags, Image, ImageOps
@@ -17,6 +18,8 @@ PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 
 THUMB_SIZE = (600, 600)
 MEDIUM_SIZE = (1200, 1200)
+
+CAMERA_TZ = ZoneInfo("America/Chicago")
 
 s3 = boto3.client("s3")
 photos_table = boto3.resource("dynamodb").Table(PHOTOS_TABLE)
@@ -121,7 +124,8 @@ def extract_exif(img):
     dto = named.get("DateTimeOriginal") or named.get("DateTime")
     if dto:
         try:
-            taken_at = int(datetime.strptime(str(dto), "%Y:%m:%d %H:%M:%S").timestamp())
+            naive = datetime.strptime(str(dto), "%Y:%m:%d %H:%M:%S")
+            taken_at = int(naive.replace(tzinfo=CAMERA_TZ).timestamp())
         except Exception:
             pass
 

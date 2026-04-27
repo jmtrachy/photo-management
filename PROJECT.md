@@ -46,11 +46,11 @@ When logging into the site, the first screen I land on is a grid of all my Album
 
 ### 2 - As an Admin I can view all recently added photos
 A navigation element titled "Photos" shows a grid of my photos, most-recently-taken first. When a photo has no embedded timestamp, its upload time is the fallback.
-* Each thumbnail displays the image, the taken-date (`YYYY-MM-DD HH:mm`), view count, and download count
-* Clicking a thumbnail opens the photo detail view (Story 3)
-* Photos load a page at a time with infinite scroll
-* Group the grid by taken-date, with a dated divider between groups
-* View and download counts reflect public traffic only — admin sessions don't increment them
+1. Each thumbnail displays the image, the taken-date (`YYYY-MM-DD HH:mm`), view count, and download count
+2. Clicking a thumbnail opens the photo detail view (Story 3)
+3. Photos load a page at a time with infinite scroll
+4. Group the grid by taken-date, with a dated divider between groups in the format `YYYY-MM-DD`
+5. View and download counts reflect public traffic only — admin sessions don't increment them
 
 ### 3 - As an Admin I can view the details of a particular photo
 Clicking a photo opens its detail view, which shows:

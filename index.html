@@ -100,6 +100,17 @@
       text-align: center;
     }
 
+    .group + .group { margin-top: 2.5rem; }
+    .group-date {
+      margin: 0 0 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--fg);
+      font-variant-numeric: tabular-nums;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem;
+    }
+
     .drop-overlay {
       position: fixed;
       inset: 0;
@@ -134,7 +145,7 @@
     <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
   </div>
   <main>
-    <div id="grid" class="grid" hidden></div>
+    <div id="groups" hidden></div>
     <div id="empty" class="empty" hidden>No photos yet.</div>
     <div id="loading" class="empty">Loading…</div>
   </main>
@@ -144,7 +155,7 @@
   <script>
     const ACCEPT = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-    const grid = document.getElementById("grid");
+    const groupsEl = document.getElementById("groups");
     const empty = document.getElementById("empty");
     const loading = document.getElementById("loading");
     const statusEl = document.getElementById("status");
@@ -156,26 +167,55 @@
 
     function setStatus(text) { statusEl.textContent = text || ""; }
 
+    function takenDateKey(photo) {
+      const d = new Date((photo.taken_at || photo.uploaded_at) * 1000);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function buildPhotoCard(photo) {
+      const card = document.createElement("div");
+      card.className = "photo-card";
+      const img = document.createElement("img");
+      img.src = photo.thumb_url;
+      img.alt = "";
+      img.loading = "lazy";
+      card.appendChild(img);
+      return card;
+    }
+
     function renderPhotos(photos) {
       knownPhotoIds = new Set(photos.map(p => p.photo_id));
       loading.hidden = true;
-      grid.innerHTML = "";
+      groupsEl.innerHTML = "";
       if (!photos.length) {
         empty.hidden = false;
-        grid.hidden = true;
+        groupsEl.hidden = true;
         return;
       }
       empty.hidden = true;
-      grid.hidden = false;
+      groupsEl.hidden = false;
+
+      let currentKey = null;
+      let currentGrid = null;
       for (const p of photos) {
-        const card = document.createElement("div");
-        card.className = "photo-card";
-        const img = document.createElement("img");
-        img.src = p.thumb_url;
-        img.alt = "";
-        img.loading = "lazy";
-        card.appendChild(img);
-        grid.appendChild(card);
+        const key = takenDateKey(p);
+        if (key !== currentKey) {
+          currentKey = key;
+          const section = document.createElement("section");
+          section.className = "group";
+          const heading = document.createElement("h2");
+          heading.className = "group-date";
+          heading.textContent = key;
+          currentGrid = document.createElement("div");
+          currentGrid.className = "grid";
+          section.appendChild(heading);
+          section.appendChild(currentGrid);
+          groupsEl.appendChild(section);
+        }
+        currentGrid.appendChild(buildPhotoCard(p));
       }
     }
 
