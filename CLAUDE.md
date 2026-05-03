@@ -43,3 +43,7 @@ Match these unless there's a deliberate reason not to:
 - `pip install -r requirements.txt`
 - `npx aws-cdk deploy PhotoManagementStack`
 - `npx aws-cdk destroy PhotoManagementStack`
+
+## Workflow
+
+Work lands via feature branches + PRs against `main`, not direct commits.
