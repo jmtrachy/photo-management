@@ -84,6 +84,10 @@
       cursor: pointer;
     }
     .upload-btn:hover { filter: brightness(1.1); }
+    .upload-btn:disabled {
+      filter: grayscale(0.6);
+      cursor: not-allowed;
+    }
     .upload-hint {
       color: var(--muted);
       font-size: 0.9rem;
@@ -93,6 +97,34 @@
       color: var(--muted);
       font-size: 0.9rem;
     }
+
+    .upload-mode, .select-mode {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      width: 100%;
+    }
+    .select-mode { display: none; }
+    body.selecting .upload-mode { display: none; }
+    body.selecting .select-mode { display: flex; }
+
+    .select-count {
+      font-size: 0.9rem;
+      color: var(--fg);
+    }
+    .select-count strong {
+      font-variant-numeric: tabular-nums;
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+      padding: 0.45rem 0.5rem;
+      font-family: inherit;
+    }
+    .link-btn:hover { color: var(--fg); }
 
     main { padding: 2rem; min-height: 50vh; }
 
@@ -110,13 +142,51 @@
       flex-direction: column;
       color: inherit;
       text-decoration: none;
+      position: relative;
     }
     .photo-card:hover { border-color: var(--accent); }
+    .photo-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
     .photo-card .thumb {
       aspect-ratio: 1;
       width: 100%;
       overflow: hidden;
+      position: relative;
     }
+    .radio {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.92);
+      border: 2px solid #bbb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.1s;
+      z-index: 2;
+    }
+    .radio svg {
+      width: 0.9rem;
+      height: 0.9rem;
+      color: white;
+      visibility: hidden;
+    }
+    .photo-card:hover .radio,
+    body.selecting .radio {
+      opacity: 1;
+    }
+    .photo-card.selected .radio {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .photo-card.selected .radio svg { visibility: visible; }
     .photo-card img {
       width: 100%;
       height: 100%;
@@ -171,6 +241,108 @@
       font-size: 1.2rem;
       color: var(--accent);
     }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      visibility: hidden;
+    }
+    .modal-backdrop.visible { visibility: visible; }
+    .modal {
+      background: var(--card);
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: min(440px, 92vw);
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    }
+    .modal h2 {
+      margin: 0 0 1rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .album-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .album-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.5rem;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .album-row:hover { background: var(--bg); }
+    .album-row-cover {
+      width: 48px;
+      height: 48px;
+      border-radius: 4px;
+      background: #ececec;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .album-row-cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .album-row-meta { flex: 1; min-width: 0; }
+    .album-row-title {
+      font-size: 0.95rem;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .album-row-views {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .modal-loading, .modal-empty {
+      padding: 1.5rem 0.5rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .modal-empty { font-style: italic; }
+    .modal-error {
+      margin-top: 0.5rem;
+      color: #b03030;
+      font-size: 0.85rem;
+      min-height: 1em;
+    }
+    .modal-actions {
+      margin-top: 1rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    .modal-actions button {
+      padding: 0.45rem 1rem;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .modal-actions .cancel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+    .modal-actions .cancel:hover { background: var(--bg); }
   </style>
 </head>
 <body>
@@ -183,10 +355,17 @@
     <a class="nav-link" href="/albums">Albums</a>
   </nav>
   <div class="toolbar">
-    <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
-    <span class="upload-hint">or drag photos anywhere on this page</span>
-    <span id="status" class="status"></span>
-    <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+    <div id="upload-mode-bar" class="upload-mode">
+      <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
+      <span class="upload-hint">or drag photos anywhere on this page</span>
+      <span id="status" class="status"></span>
+      <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+    </div>
+    <div id="select-mode-bar" class="select-mode">
+      <span class="select-count"><strong id="select-count">0</strong> selected</span>
+      <button id="add-to-album-btn" class="upload-btn" type="button" disabled>Add to album</button>
+      <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
+    </div>
   </div>
   <main>
     <div id="groups" hidden></div>
@@ -196,6 +375,20 @@
   <div id="drop-overlay" class="drop-overlay">
     <span>Drop to upload</span>
   </div>
+
+  <div id="album-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="album-modal-title">
+    <div class="modal">
+      <h2 id="album-modal-title">Add to album</h2>
+      <div id="album-modal-loading" class="modal-loading">Loading…</div>
+      <div id="album-modal-empty" class="modal-empty" hidden>No albums yet — create one on the Albums page.</div>
+      <ul id="album-modal-list" class="album-list" hidden></ul>
+      <div id="album-modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="album-modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const ACCEPT = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -207,7 +400,51 @@
     const fileInput = document.getElementById("file-input");
     const dropOverlay = document.getElementById("drop-overlay");
 
+    const selectCountEl = document.getElementById("select-count");
+    const addToAlbumBtn = document.getElementById("add-to-album-btn");
+    const cancelSelectBtn = document.getElementById("cancel-select-btn");
+    const albumModalBackdrop = document.getElementById("album-modal-backdrop");
+    const albumModalLoading = document.getElementById("album-modal-loading");
+    const albumModalEmpty = document.getElementById("album-modal-empty");
+    const albumModalList = document.getElementById("album-modal-list");
+    const albumModalError = document.getElementById("album-modal-error");
+    const albumModalCancel = document.getElementById("album-modal-cancel");
+
     let knownPhotoIds = new Set();
+    let selectionMode = false;
+    const selectedIds = new Set();
+
+    function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+
+    function updateSelectionUI() {
+      for (const card of document.querySelectorAll(".photo-card")) {
+        const pid = card.dataset.photoId;
+        if (selectedIds.has(pid)) card.classList.add("selected");
+        else card.classList.remove("selected");
+      }
+      selectCountEl.textContent = String(selectedIds.size);
+      addToAlbumBtn.disabled = selectedIds.size === 0;
+    }
+
+    function enterSelectionMode() {
+      selectionMode = true;
+      document.body.classList.add("selecting");
+    }
+
+    function exitSelectionMode() {
+      selectionMode = false;
+      selectedIds.clear();
+      document.body.classList.remove("selecting");
+      updateSelectionUI();
+    }
+
+    function toggleSelection(photoId) {
+      if (selectedIds.has(photoId)) selectedIds.delete(photoId);
+      else selectedIds.add(photoId);
+      updateSelectionUI();
+    }
+
+    cancelSelectBtn.addEventListener("click", exitSelectionMode);
 
     function setStatus(text) { statusEl.textContent = text || ""; }
 
@@ -229,9 +466,30 @@
       const card = document.createElement("a");
       card.className = "photo-card";
       card.href = `/photo/${photo.photo_id}`;
+      card.dataset.photoId = photo.photo_id;
+
+      card.addEventListener("click", (e) => {
+        if (selectionMode) {
+          e.preventDefault();
+          toggleSelection(photo.photo_id);
+        }
+      });
 
       const thumb = document.createElement("div");
       thumb.className = "thumb";
+
+      const radio = document.createElement("span");
+      radio.className = "radio";
+      radio.setAttribute("aria-label", "Select photo");
+      radio.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.8 11.5 12.5 5"/></svg>';
+      radio.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!selectionMode) enterSelectionMode();
+        toggleSelection(photo.photo_id);
+      });
+      thumb.appendChild(radio);
+
       const img = document.createElement("img");
       img.src = photo.thumb_url;
       img.alt = "";
@@ -285,6 +543,7 @@
         }
         currentGrid.appendChild(buildPhotoCard(p));
       }
+      updateSelectionUI();
     }
 
     async function fetchPhotos() {
@@ -415,6 +674,110 @@
         }
       }
     }
+
+    function isAlbumModalOpen() {
+      return albumModalBackdrop.classList.contains("visible");
+    }
+
+    function closeAlbumModal() {
+      albumModalBackdrop.classList.remove("visible");
+    }
+
+    async function openAlbumModal() {
+      if (selectedIds.size === 0) return;
+      albumModalBackdrop.classList.add("visible");
+      albumModalLoading.hidden = false;
+      albumModalEmpty.hidden = true;
+      albumModalList.hidden = true;
+      albumModalList.innerHTML = "";
+      albumModalError.textContent = "";
+
+      try {
+        const resp = await fetch("/api/albums");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const albums = (data.albums || []).slice(0, 10);
+        albumModalLoading.hidden = true;
+        if (!albums.length) {
+          albumModalEmpty.hidden = false;
+          return;
+        }
+        albumModalList.hidden = false;
+        for (const a of albums) {
+          const li = document.createElement("li");
+          li.className = "album-row";
+          const cover = document.createElement("div");
+          cover.className = "album-row-cover";
+          if (a.cover_thumb_url) {
+            const coverImg = document.createElement("img");
+            coverImg.src = a.cover_thumb_url;
+            coverImg.alt = "";
+            coverImg.loading = "lazy";
+            cover.appendChild(coverImg);
+          }
+          const meta = document.createElement("div");
+          meta.className = "album-row-meta";
+          const title = document.createElement("div");
+          title.className = "album-row-title";
+          title.textContent = a.title;
+          title.title = a.title;
+          const views = document.createElement("div");
+          views.className = "album-row-views";
+          views.textContent = pluralize(a.view_count ?? 0, "view");
+          meta.appendChild(title);
+          meta.appendChild(views);
+          li.appendChild(cover);
+          li.appendChild(meta);
+          li.addEventListener("click", () => addToAlbum(a));
+          albumModalList.appendChild(li);
+        }
+      } catch (err) {
+        albumModalLoading.hidden = true;
+        albumModalError.textContent = `Failed to load albums: ${err.message}`;
+      }
+    }
+
+    async function addToAlbum(album) {
+      const ids = Array.from(selectedIds);
+      if (!ids.length) return;
+      albumModalList.style.pointerEvents = "none";
+      albumModalError.textContent = "";
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(album.album_id)}/photos`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({photo_ids: ids}),
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        closeAlbumModal();
+        exitSelectionMode();
+        setStatus(`Added ${pluralize(data.added, "photo")} to “${data.title}”.`);
+        setTimeout(() => setStatus(""), 4000);
+      } catch (err) {
+        albumModalError.textContent = err.message;
+      } finally {
+        albumModalList.style.pointerEvents = "";
+      }
+    }
+
+    addToAlbumBtn.addEventListener("click", openAlbumModal);
+    albumModalCancel.addEventListener("click", closeAlbumModal);
+    albumModalBackdrop.addEventListener("click", (e) => {
+      if (e.target === albumModalBackdrop) closeAlbumModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (isAlbumModalOpen()) closeAlbumModal();
+      else if (selectionMode) exitSelectionMode();
+    });
   </script>
 </body>
 </html>

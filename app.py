@@ -20,6 +20,7 @@ COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
 LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
 PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
+MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
@@ -51,8 +52,10 @@ dynamodb = boto3.resource("dynamodb")
 tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
 photos_table = dynamodb.Table(PHOTOS_TABLE)
 albums_table = dynamodb.Table(ALBUMS_TABLE)
+memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
 
 ALBUM_TITLE_MAX_LEN = 200
+ADD_TO_ALBUM_MAX = 100
 
 _serializer: URLSafeTimedSerializer | None = None
 
@@ -192,12 +195,25 @@ async def list_albums(_email: str = Depends(require_admin)):
     )
     albums = []
     for item in resp.get("Items", []):
+        cover_photo_id = item.get("cover_photo_id")
+        cover_thumb_url = None
+        if cover_photo_id:
+            cover_thumb_url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": PHOTOS_BUCKET,
+                    "Key": f"derivatives/{cover_photo_id}/thumb.jpg",
+                },
+                ExpiresIn=IMAGE_GET_TTL_SECONDS,
+            )
         albums.append(
             {
                 "album_id": item["album_id"],
                 "title": item.get("title", ""),
                 "view_count": int(item.get("view_count", 0)),
                 "created_at": int(item.get("created_at", 0)),
+                "cover_photo_id": cover_photo_id,
+                "cover_thumb_url": cover_thumb_url,
             }
         )
     return {"albums": albums, "cursor": None}
@@ -233,6 +249,85 @@ async def create_album(
         )
     )
     return {"album_id": album_id, "title": title, "created_at": now}
+
+
+class AddPhotosRequest(BaseModel):
+    photo_ids: list[str]
+
+
+@app.post("/api/albums/{album_id}/photos")
+async def add_photos_to_album(
+    album_id: str,
+    payload: AddPhotosRequest,
+    _email: str = Depends(require_admin),
+):
+    if not payload.photo_ids:
+        raise HTTPException(status_code=400, detail="No photos specified")
+    if len(payload.photo_ids) > ADD_TO_ALBUM_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot add more than {ADD_TO_ALBUM_MAX} photos at once",
+        )
+
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    keys = [{"photo_id": pid} for pid in payload.photo_ids]
+    photo_items: list[dict] = []
+    request_items: dict = {PHOTOS_TABLE: {"Keys": keys}}
+    while request_items:
+        resp = dynamodb.batch_get_item(RequestItems=request_items)
+        photo_items.extend(resp.get("Responses", {}).get(PHOTOS_TABLE, []))
+        request_items = resp.get("UnprocessedKeys") or {}
+    photo_by_id = {p["photo_id"]: p for p in photo_items}
+
+    added = 0
+    with memberships_table.batch_writer() as batch:
+        for pid in payload.photo_ids:
+            photo = photo_by_id.get(pid)
+            if not photo:
+                continue
+            batch.put_item(
+                Item={
+                    "pk": f"ALBUM#{album_id}",
+                    "sk": f"PHOTO#{pid}",
+                    "taken_at": int(photo.get("taken_at", 0)),
+                }
+            )
+            added += 1
+
+    if added > 0 and not album.get("cover_photo_id"):
+        cover_photo_id = max(
+            (pid for pid in payload.photo_ids if pid in photo_by_id),
+            key=lambda pid: int(photo_by_id[pid].get("taken_at", 0)),
+        )
+        albums_table.update_item(
+            Key={"album_id": album_id},
+            UpdateExpression="SET cover_photo_id = :cpid",
+            ExpressionAttributeValues={":cpid": cover_photo_id},
+        )
+        logger.info(
+            json.dumps(
+                {
+                    "event": "album_cover_initialized",
+                    "album_id": album_id,
+                    "cover_photo_id": cover_photo_id,
+                }
+            )
+        )
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "photos_added_to_album",
+                "album_id": album_id,
+                "added": added,
+                "requested": len(payload.photo_ids),
+            }
+        )
+    )
+    return {"added": added, "title": album["title"], "album_id": album_id}
 
 
 class PresignFile(BaseModel):

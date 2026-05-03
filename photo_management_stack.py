@@ -75,6 +75,29 @@ class PhotoManagementStack(Stack):
             ),
         )
 
+        memberships_table = dynamodb.Table(
+            self,
+            "MembershipsTable",
+            partition_key=dynamodb.Attribute(
+                name="pk", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="sk", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        memberships_table.add_global_secondary_index(
+            index_name="ByPhoto",
+            partition_key=dynamodb.Attribute(
+                name="sk", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="pk", type=dynamodb.AttributeType.STRING
+            ),
+        )
+
         login_tokens_table = dynamodb.Table(
             self,
             "LoginTokensTable",
@@ -158,6 +181,7 @@ class PhotoManagementStack(Stack):
                 "LOGIN_TOKENS_TABLE": login_tokens_table.table_name,
                 "PHOTOS_TABLE": photos_table.table_name,
                 "ALBUMS_TABLE": albums_table.table_name,
+                "MEMBERSHIPS_TABLE": memberships_table.table_name,
                 "PHOTOS_BUCKET": photos_bucket.bucket_name,
                 "ADMIN_EMAILS": ADMIN_EMAILS,
                 "FROM_EMAIL": FROM_EMAIL,
@@ -168,6 +192,7 @@ class PhotoManagementStack(Stack):
         login_tokens_table.grant_read_write_data(fn)
         photos_table.grant_read_data(fn)
         albums_table.grant_read_write_data(fn)
+        memberships_table.grant_read_write_data(fn)
         photos_bucket.grant_read_write(fn)
 
         derivatives_fn = _lambda.DockerImageFunction(
@@ -253,5 +278,6 @@ class PhotoManagementStack(Stack):
         CfnOutput(self, "PhotosBucketName", value=photos_bucket.bucket_name)
         CfnOutput(self, "PhotosTableName", value=photos_table.table_name)
         CfnOutput(self, "AlbumsTableName", value=albums_table.table_name)
+        CfnOutput(self, "MembershipsTableName", value=memberships_table.table_name)
         CfnOutput(self, "LoginTokensTableName", value=login_tokens_table.table_name)
         CfnOutput(self, "EmailIdentityName", value=email_identity.email_identity_name)
