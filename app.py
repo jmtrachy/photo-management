@@ -148,6 +148,7 @@ def send_magic_link(to_email: str, link: str) -> None:
 _HERE = Path(__file__).parent
 _INDEX_HTML = _HERE.joinpath("index.html").read_text()
 _PHOTO_HTML = _HERE.joinpath("photo.html").read_text()
+_ALBUMS_HTML = _HERE.joinpath("albums.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
 _LOGIN_SENT_HTML = _HERE.joinpath("login_sent.html").read_text()
 
@@ -165,6 +166,11 @@ async def auth_required_handler(request: Request, _exc: AuthRequired):
 @app.get("/", response_class=HTMLResponse)
 async def index(_email: str = Depends(require_admin)):
     return _INDEX_HTML
+
+
+@app.get("/albums", response_class=HTMLResponse)
+async def albums_page(_email: str = Depends(require_admin)):
+    return _ALBUMS_HTML
 
 
 class PresignFile(BaseModel):

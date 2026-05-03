@@ -42,6 +42,27 @@
     }
     header a.signout:hover { color: var(--fg); text-decoration: underline; }
 
+    .nav {
+      padding: 0 2rem;
+      display: flex;
+      gap: 0.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .nav-link {
+      padding: 0.7rem 1rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .nav-link:hover { color: var(--fg); }
+    .nav-link.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
     .toolbar {
       padding: 0.75rem 2rem;
       display: flex;
@@ -157,6 +178,10 @@
     <h1>Your Photographs</h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
+  <nav class="nav">
+    <a class="nav-link active" href="/">All Photos</a>
+    <a class="nav-link" href="/albums">Albums</a>
+  </nav>
   <div class="toolbar">
     <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
     <span class="upload-hint">or drag photos anywhere on this page</span>
