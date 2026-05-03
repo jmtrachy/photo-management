@@ -32,7 +32,7 @@ SESSION_COOKIE = "session"
 SESSION_MAX_AGE_SECONDS = 30 * 24 * 3600
 TOKEN_TTL_SECONDS = 15 * 60
 PRESIGN_PUT_TTL_SECONDS = 15 * 60
-THUMB_GET_TTL_SECONDS = 60 * 60
+IMAGE_GET_TTL_SECONDS = 60 * 60
 PHOTO_PAGE_LIMIT = 200
 
 CONTENT_TYPE_TO_EXT = {
@@ -40,6 +40,7 @@ CONTENT_TYPE_TO_EXT = {
     "image/png": "png",
     "image/webp": "webp",
 }
+EXT_TO_CONTENT_TYPE = {v: k for k, v in CONTENT_TYPE_TO_EXT.items()}
 
 ssm = boto3.client("ssm")
 ses = boto3.client("ses")
@@ -146,6 +147,7 @@ def send_magic_link(to_email: str, link: str) -> None:
 
 _HERE = Path(__file__).parent
 _INDEX_HTML = _HERE.joinpath("index.html").read_text()
+_PHOTO_HTML = _HERE.joinpath("photo.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
 _LOGIN_SENT_HTML = _HERE.joinpath("login_sent.html").read_text()
 
@@ -223,7 +225,7 @@ async def list_photos(_email: str = Depends(require_admin)):
                 "Bucket": PHOTOS_BUCKET,
                 "Key": f"derivatives/{photo_id}/thumb.jpg",
             },
-            ExpiresIn=THUMB_GET_TTL_SECONDS,
+            ExpiresIn=IMAGE_GET_TTL_SECONDS,
         )
         photos.append(
             {
@@ -233,9 +235,90 @@ async def list_photos(_email: str = Depends(require_admin)):
                 "uploaded_at": int(item.get("uploaded_at", 0)),
                 "width": int(item.get("width", 0)),
                 "height": int(item.get("height", 0)),
+                "view_count": int(item.get("view_count", 0)),
+                "download_count": int(item.get("download_count", 0)),
             }
         )
     return {"photos": photos, "cursor": None}
+
+
+@app.get("/photo/{photo_id}", response_class=HTMLResponse)
+async def photo_detail_page(photo_id: str, _email: str = Depends(require_admin)):
+    return _PHOTO_HTML
+
+
+@app.get("/api/photos/{photo_id}")
+async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
+    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    taken_at = int(item.get("taken_at", 0))
+    s3_key = item["s3_key"]
+    ext = s3_key.rsplit(".", 1)[-1].lower()
+
+    newer = photos_table.query(
+        IndexName="ByTakenAt",
+        KeyConditionExpression=(
+            Key("entity_type").eq("PHOTO") & Key("taken_at").gt(taken_at)
+        ),
+        ScanIndexForward=True,
+        Limit=1,
+    )
+    older = photos_table.query(
+        IndexName="ByTakenAt",
+        KeyConditionExpression=(
+            Key("entity_type").eq("PHOTO") & Key("taken_at").lt(taken_at)
+        ),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    prev_items = newer.get("Items") or []
+    next_items = older.get("Items") or []
+    prev_photo_id = prev_items[0]["photo_id"] if prev_items else None
+    next_photo_id = next_items[0]["photo_id"] if next_items else None
+
+    medium_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": f"derivatives/{photo_id}/medium.jpg",
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+    original_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": s3_key,
+            "ResponseContentType": EXT_TO_CONTENT_TYPE.get(ext, "application/octet-stream"),
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+    download_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": s3_key,
+            "ResponseContentDisposition": f'attachment; filename="{photo_id}.{ext}"',
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+
+    return {
+        "photo_id": photo_id,
+        "taken_at": taken_at,
+        "uploaded_at": int(item.get("uploaded_at", 0)),
+        "width": int(item.get("width", 0)),
+        "height": int(item.get("height", 0)),
+        "view_count": int(item.get("view_count", 0)),
+        "download_count": int(item.get("download_count", 0)),
+        "medium_url": medium_url,
+        "original_url": original_url,
+        "download_url": download_url,
+        "prev_photo_id": prev_photo_id,
+        "next_photo_id": next_photo_id,
+    }
 
 
 @app.get("/login", response_class=HTMLResponse)

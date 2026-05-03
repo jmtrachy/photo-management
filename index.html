@@ -85,7 +85,16 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      color: inherit;
+      text-decoration: none;
+    }
+    .photo-card:hover { border-color: var(--accent); }
+    .photo-card .thumb {
       aspect-ratio: 1;
+      width: 100%;
+      overflow: hidden;
     }
     .photo-card img {
       width: 100%;
@@ -93,6 +102,16 @@
       object-fit: cover;
       display: block;
     }
+    .photo-meta {
+      padding: 0.4rem 0.55rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .photo-meta .counts { white-space: nowrap; }
     .empty {
       color: var(--muted);
       font-style: italic;
@@ -167,22 +186,46 @@
 
     function setStatus(text) { statusEl.textContent = text || ""; }
 
-    function takenDateKey(photo) {
+    function takenDateParts(photo) {
       const d = new Date((photo.taken_at || photo.uploaded_at) * 1000);
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return { date: `${y}-${m}-${day}`, time: `${hh}:${mm}` };
+    }
+
+    function takenDateKey(photo) {
+      return takenDateParts(photo).date;
     }
 
     function buildPhotoCard(photo) {
-      const card = document.createElement("div");
+      const card = document.createElement("a");
       card.className = "photo-card";
+      card.href = `/photo/${photo.photo_id}`;
+
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
       const img = document.createElement("img");
       img.src = photo.thumb_url;
       img.alt = "";
       img.loading = "lazy";
-      card.appendChild(img);
+      thumb.appendChild(img);
+      card.appendChild(thumb);
+
+      const meta = document.createElement("div");
+      meta.className = "photo-meta";
+      const { date, time } = takenDateParts(photo);
+      const taken = document.createElement("span");
+      taken.textContent = `${date} ${time}`;
+      const counts = document.createElement("span");
+      counts.className = "counts";
+      counts.textContent = `${photo.view_count ?? 0} views · ${photo.download_count ?? 0} dl`;
+      meta.appendChild(taken);
+      meta.appendChild(counts);
+      card.appendChild(meta);
+
       return card;
     }
 

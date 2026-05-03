@@ -54,14 +54,14 @@ A navigation element titled "Photos" shows a grid of my photos, most-recently-ta
 
 ### 3 - As an Admin I can view the details of a particular photo
 Clicking a photo opens its detail view, which shows:
-* The image (medium size by default, with an option to view or download the original)
-* View count and download count
-* The names of all albums this photo belongs to
-* EXIF details: taken date, camera type, ISO, aperture, shutter speed
-* A trashcan to delete the photo. Deleting cascades:
-  - Removes the Photo record
-  - Removes every membership record for this photo (so it disappears from every album it was tagged into)
-  - Deletes the S3 objects (thumbnail, medium, original). S3 versioning retains the original for recovery — see `PROJECT_RESPONSE.md` §10
+1. The image (medium size by default, with an option to view or download the original)
+2. View count and download count
+3. The names of all albums this photo belongs to
+4. EXIF details: taken date, camera type, ISO, aperture, shutter speed
+5. A trashcan to delete the photo. Deleting cascades:
+  * Removes the Photo record
+  * Removes every membership record for this photo (so it disappears from every album it was tagged into)
+  * Deletes the S3 objects (thumbnail, medium, original). S3 versioning retains the original for recovery — see `PROJECT_RESPONSE.md` §10
 
 ### 4 - As an Admin I can upload photos from the Photos screen
 I can drag one or more photos onto the Photos screen and they upload asynchronously:
