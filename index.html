@@ -97,6 +97,11 @@
       color: var(--muted);
       font-size: 0.9rem;
     }
+    .status a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .status a:hover { text-decoration: underline; }
 
     .upload-mode, .select-mode {
       display: flex;
@@ -465,7 +470,7 @@
     function buildPhotoCard(photo) {
       const card = document.createElement("a");
       card.className = "photo-card";
-      card.href = `/photo/${photo.photo_id}`;
+      card.href = `/photo/${photo.photo_id}?from=${encodeURIComponent("/")}`;
       card.dataset.photoId = photo.photo_id;
 
       card.addEventListener("click", (e) => {
@@ -759,7 +764,14 @@
         const data = await resp.json();
         closeAlbumModal();
         exitSelectionMode();
-        setStatus(`Added ${pluralize(data.added, "photo")} to “${data.title}”.`);
+        const link = document.createElement("a");
+        link.href = `/album/${encodeURIComponent(data.album_id)}`;
+        link.textContent = data.title;
+        statusEl.replaceChildren(
+          document.createTextNode(`Added ${pluralize(data.added, "photo")} to “`),
+          link,
+          document.createTextNode("”."),
+        );
         setTimeout(() => setStatus(""), 4000);
       } catch (err) {
         albumModalError.textContent = err.message;
