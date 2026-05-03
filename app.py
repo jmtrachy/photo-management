@@ -19,6 +19,7 @@ logger.setLevel(logging.INFO)
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
 LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
 PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
+ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
@@ -34,6 +35,7 @@ TOKEN_TTL_SECONDS = 15 * 60
 PRESIGN_PUT_TTL_SECONDS = 15 * 60
 IMAGE_GET_TTL_SECONDS = 60 * 60
 PHOTO_PAGE_LIMIT = 200
+ALBUM_PAGE_LIMIT = 100
 
 CONTENT_TYPE_TO_EXT = {
     "image/jpeg": "jpg",
@@ -48,6 +50,9 @@ s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
 photos_table = dynamodb.Table(PHOTOS_TABLE)
+albums_table = dynamodb.Table(ALBUMS_TABLE)
+
+ALBUM_TITLE_MAX_LEN = 200
 
 _serializer: URLSafeTimedSerializer | None = None
 
@@ -171,6 +176,63 @@ async def index(_email: str = Depends(require_admin)):
 @app.get("/albums", response_class=HTMLResponse)
 async def albums_page(_email: str = Depends(require_admin)):
     return _ALBUMS_HTML
+
+
+class CreateAlbumRequest(BaseModel):
+    title: str
+
+
+@app.get("/api/albums")
+async def list_albums(_email: str = Depends(require_admin)):
+    resp = albums_table.query(
+        IndexName="ByCreatedAt",
+        KeyConditionExpression=Key("entity_type").eq("ALBUM"),
+        ScanIndexForward=False,
+        Limit=ALBUM_PAGE_LIMIT,
+    )
+    albums = []
+    for item in resp.get("Items", []):
+        albums.append(
+            {
+                "album_id": item["album_id"],
+                "title": item.get("title", ""),
+                "view_count": int(item.get("view_count", 0)),
+                "created_at": int(item.get("created_at", 0)),
+            }
+        )
+    return {"albums": albums, "cursor": None}
+
+
+@app.post("/api/albums")
+async def create_album(
+    payload: CreateAlbumRequest, _email: str = Depends(require_admin)
+):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(title) > ALBUM_TITLE_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Title exceeds {ALBUM_TITLE_MAX_LEN} characters",
+        )
+
+    album_id = secrets.token_hex(8)
+    now = int(time.time())
+    item = {
+        "album_id": album_id,
+        "entity_type": "ALBUM",
+        "title": title,
+        "title_lower": title.lower(),
+        "created_at": now,
+        "view_count": 0,
+    }
+    albums_table.put_item(Item=item)
+    logger.info(
+        json.dumps(
+            {"event": "album_created", "album_id": album_id, "title": title}
+        )
+    )
+    return {"album_id": album_id, "title": title, "created_at": now}
 
 
 class PresignFile(BaseModel):

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Albums</title>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --fg: #222;
+      --muted: #888;
+      --border: #e5e5e5;
+      --card: #ffffff;
+      --accent: #2266dd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    header {
+      padding: 1.5rem 2rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    header a.signout {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-decoration: none;
+    }
+    header a.signout:hover { color: var(--fg); text-decoration: underline; }
+
+    .nav {
+      padding: 0 2rem;
+      display: flex;
+      gap: 0.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .nav-link {
+      padding: 0.7rem 1rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .nav-link:hover { color: var(--fg); }
+    .nav-link.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .toolbar {
+      padding: 0.75rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .new-btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.45rem 1rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .new-btn:hover { filter: brightness(1.1); }
+    .status {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    main { padding: 2rem; min-height: 50vh; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .album-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .album-card .cover {
+      aspect-ratio: 1;
+      width: 100%;
+      background: #ececec;
+    }
+    .album-meta {
+      padding: 0.55rem 0.7rem 0.65rem;
+    }
+    .album-title {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--fg);
+      margin: 0 0 0.2rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .album-views {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .empty, .loading {
+      color: var(--muted);
+      font-style: italic;
+      padding: 4rem 1rem;
+      text-align: center;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      visibility: hidden;
+    }
+    .modal-backdrop.visible { visibility: visible; }
+    .modal {
+      background: var(--card);
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: min(420px, 90vw);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    }
+    .modal h2 {
+      margin: 0 0 1rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .modal label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .modal input[type="text"] {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      font-size: 0.95rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+    }
+    .modal input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .modal-error {
+      margin-top: 0.5rem;
+      color: #b03030;
+      font-size: 0.85rem;
+      min-height: 1em;
+    }
+    .modal-actions {
+      margin-top: 1.25rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    .modal-actions button {
+      padding: 0.45rem 1rem;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .modal-actions .cancel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+    .modal-actions .cancel:hover { background: var(--bg); }
+    .modal-actions .submit {
+      background: var(--accent);
+      color: white;
+      border: none;
+    }
+    .modal-actions .submit:hover { filter: brightness(1.1); }
+    .modal-actions .submit:disabled {
+      filter: grayscale(0.5);
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Your Photographs</h1>
+    <a class="signout" href="/logout">Sign out</a>
+  </header>
+  <nav class="nav">
+    <a class="nav-link" href="/">All Photos</a>
+    <a class="nav-link active" href="/albums">Albums</a>
+  </nav>
+  <div class="toolbar">
+    <button id="new-album-btn" class="new-btn" type="button">New album</button>
+    <span id="status" class="status"></span>
+  </div>
+  <main>
+    <div id="grid" class="grid" hidden></div>
+    <div id="empty" class="empty" hidden>No albums yet.</div>
+    <div id="loading" class="loading">Loading…</div>
+  </main>
+
+  <div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <form id="new-album-form" class="modal">
+      <h2 id="modal-title">New album</h2>
+      <label for="album-title">Title</label>
+      <input id="album-title" name="title" type="text" maxlength="200" required autocomplete="off">
+      <div id="modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="cancel-btn">Cancel</button>
+        <button type="submit" class="submit" id="submit-btn">Create</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const newBtn = document.getElementById("new-album-btn");
+    const backdrop = document.getElementById("modal-backdrop");
+    const form = document.getElementById("new-album-form");
+    const titleInput = document.getElementById("album-title");
+    const errorEl = document.getElementById("modal-error");
+    const cancelBtn = document.getElementById("cancel-btn");
+    const submitBtn = document.getElementById("submit-btn");
+    const statusEl = document.getElementById("status");
+    const grid = document.getElementById("grid");
+    const empty = document.getElementById("empty");
+    const loading = document.getElementById("loading");
+
+    function pluralize(n, word) {
+      return `${n} ${word}${n === 1 ? "" : "s"}`;
+    }
+
+    function buildAlbumCard(album) {
+      const card = document.createElement("div");
+      card.className = "album-card";
+
+      const cover = document.createElement("div");
+      cover.className = "cover";
+      card.appendChild(cover);
+
+      const meta = document.createElement("div");
+      meta.className = "album-meta";
+      const title = document.createElement("div");
+      title.className = "album-title";
+      title.textContent = album.title;
+      title.title = album.title;
+      const views = document.createElement("div");
+      views.className = "album-views";
+      views.textContent = pluralize(album.view_count ?? 0, "view");
+      meta.appendChild(title);
+      meta.appendChild(views);
+      card.appendChild(meta);
+
+      return card;
+    }
+
+    function renderAlbums(albums) {
+      grid.innerHTML = "";
+      loading.hidden = true;
+      if (!albums.length) {
+        empty.hidden = false;
+        grid.hidden = true;
+        return;
+      }
+      empty.hidden = true;
+      grid.hidden = false;
+      for (const a of albums) grid.appendChild(buildAlbumCard(a));
+    }
+
+    async function fetchAlbums() {
+      const resp = await fetch("/api/albums");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      return data.albums || [];
+    }
+
+    async function refreshGrid() {
+      try {
+        renderAlbums(await fetchAlbums());
+      } catch (err) {
+        loading.textContent = `Failed to load albums: ${err.message}`;
+        loading.hidden = false;
+      }
+    }
+
+    refreshGrid();
+
+    function openModal() {
+      errorEl.textContent = "";
+      titleInput.value = "";
+      submitBtn.disabled = false;
+      backdrop.classList.add("visible");
+      titleInput.focus();
+    }
+    function closeModal() {
+      backdrop.classList.remove("visible");
+    }
+
+    newBtn.addEventListener("click", openModal);
+    cancelBtn.addEventListener("click", closeModal);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && backdrop.classList.contains("visible")) closeModal();
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const title = titleInput.value.trim();
+      if (!title) {
+        errorEl.textContent = "Title is required.";
+        return;
+      }
+      submitBtn.disabled = true;
+      errorEl.textContent = "";
+      try {
+        const resp = await fetch("/api/albums", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({title}),
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        closeModal();
+        statusEl.textContent = `Created “${data.title}”.`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        refreshGrid();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
