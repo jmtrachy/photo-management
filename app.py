@@ -157,6 +157,7 @@ _HERE = Path(__file__).parent
 _INDEX_HTML = _HERE.joinpath("index.html").read_text()
 _PHOTO_HTML = _HERE.joinpath("photo.html").read_text()
 _ALBUMS_HTML = _HERE.joinpath("albums.html").read_text()
+_ALBUM_HTML = _HERE.joinpath("album.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
 _LOGIN_SENT_HTML = _HERE.joinpath("login_sent.html").read_text()
 
@@ -179,6 +180,11 @@ async def index(_email: str = Depends(require_admin)):
 @app.get("/albums", response_class=HTMLResponse)
 async def albums_page(_email: str = Depends(require_admin)):
     return _ALBUMS_HTML
+
+
+@app.get("/album/{album_id}", response_class=HTMLResponse)
+async def album_page(album_id: str, _email: str = Depends(require_admin)):
+    return _ALBUM_HTML
 
 
 class CreateAlbumRequest(BaseModel):
@@ -217,6 +223,86 @@ async def list_albums(_email: str = Depends(require_admin)):
             }
         )
     return {"albums": albums, "cursor": None}
+
+
+@app.get("/api/albums/{album_id}")
+async def get_album(album_id: str, _email: str = Depends(require_admin)):
+    item = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    memberships: list[dict] = []
+    last_key = None
+    while True:
+        kw: dict = {"KeyConditionExpression": Key("pk").eq(f"ALBUM#{album_id}")}
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = memberships_table.query(**kw)
+        memberships.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
+    photo_ids = [m["sk"].split("#", 1)[1] for m in memberships]
+
+    photo_by_id: dict = {}
+    for i in range(0, len(photo_ids), 100):
+        chunk = photo_ids[i : i + 100]
+        request_items: dict = {
+            PHOTOS_TABLE: {"Keys": [{"photo_id": pid} for pid in chunk]}
+        }
+        while request_items:
+            resp = dynamodb.batch_get_item(RequestItems=request_items)
+            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
+                photo_by_id[p["photo_id"]] = p
+            request_items = resp.get("UnprocessedKeys") or {}
+
+    photos = []
+    for pid in photo_ids:
+        p = photo_by_id.get(pid)
+        if not p:
+            continue
+        thumb_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": f"derivatives/{pid}/thumb.jpg",
+            },
+            ExpiresIn=IMAGE_GET_TTL_SECONDS,
+        )
+        photos.append(
+            {
+                "photo_id": pid,
+                "thumb_url": thumb_url,
+                "taken_at": int(p.get("taken_at", 0)),
+                "uploaded_at": int(p.get("uploaded_at", 0)),
+                "view_count": int(p.get("view_count", 0)),
+                "download_count": int(p.get("download_count", 0)),
+            }
+        )
+
+    cover_photo_id = item.get("cover_photo_id")
+    cover_thumb_url = None
+    if cover_photo_id:
+        cover_thumb_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": f"derivatives/{cover_photo_id}/thumb.jpg",
+            },
+            ExpiresIn=IMAGE_GET_TTL_SECONDS,
+        )
+
+    return {
+        "album_id": album_id,
+        "title": item.get("title", ""),
+        "view_count": int(item.get("view_count", 0)),
+        "created_at": int(item.get("created_at", 0)),
+        "cover_photo_id": cover_photo_id,
+        "cover_thumb_url": cover_thumb_url,
+        "photos": photos,
+    }
 
 
 @app.post("/api/albums")

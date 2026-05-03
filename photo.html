@@ -146,6 +146,10 @@
   </main>
   <script>
     const photoId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
+    const fromRaw = new URLSearchParams(location.search).get("from") || "/";
+    const fromPath = (fromRaw.startsWith("/") && !fromRaw.startsWith("//")) ? fromRaw : "/";
+    const fromQuery = `?from=${encodeURIComponent(fromPath)}`;
+
     const stage = document.getElementById("stage");
     const photoEl = document.getElementById("photo");
     const loading = document.getElementById("loading");
@@ -156,8 +160,7 @@
     const backBtn = document.getElementById("back-btn");
 
     backBtn.addEventListener("click", () => {
-      if (history.length > 1) history.back();
-      else location.href = "/";
+      location.href = fromPath;
     });
 
     async function load() {
@@ -171,11 +174,11 @@
         downloadOriginal.href = data.download_url;
 
         if (data.prev_photo_id) {
-          prevLink.href = `/photo/${data.prev_photo_id}`;
+          prevLink.href = `/photo/${data.prev_photo_id}${fromQuery}`;
           prevLink.hidden = false;
         }
         if (data.next_photo_id) {
-          nextLink.href = `/photo/${data.next_photo_id}`;
+          nextLink.href = `/photo/${data.next_photo_id}${fromQuery}`;
           nextLink.hidden = false;
         }
 
