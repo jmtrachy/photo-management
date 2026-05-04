@@ -183,6 +183,24 @@
       font-size: 1.2rem;
       color: var(--accent);
     }
+
+    .progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: rgba(34, 102, 221, 0.15);
+      z-index: 150;
+      visibility: hidden;
+    }
+    .progress.active { visibility: visible; }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.2s ease;
+    }
   </style>
 </head>
 <body>
@@ -212,6 +230,7 @@
   <div id="drop-overlay" class="drop-overlay">
     <span>Drop to upload</span>
   </div>
+  <div id="progress" class="progress"><div id="progress-fill" class="progress-fill"></div></div>
   <script src="/static/uploads.js"></script>
   <script>
     const albumId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
@@ -224,6 +243,18 @@
     const uploadBtn = document.getElementById("upload-btn");
     const fileInput = document.getElementById("file-input");
     const dropOverlay = document.getElementById("drop-overlay");
+    const progressEl = document.getElementById("progress");
+    const progressFillEl = document.getElementById("progress-fill");
+
+    function updateProgress({ done, total }) {
+      progressEl.classList.add("active");
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      progressFillEl.style.width = `${pct}%`;
+    }
+    function hideProgress() {
+      progressEl.classList.remove("active");
+      progressFillEl.style.width = "0%";
+    }
 
     function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
     function setStatus(text) { statusEl.textContent = text || ""; }
@@ -329,11 +360,16 @@
     });
 
     async function handleFiles(files) {
-      const result = await PhotoUploads.uploadFiles(files, {
-        albumId,
-        onStatus: setStatus,
-      });
-      if (result.added > 0) await load();
+      try {
+        const result = await PhotoUploads.uploadFiles(files, {
+          albumId,
+          onStatus: setStatus,
+          onProgress: updateProgress,
+        });
+        if (result.added > 0) await load();
+      } finally {
+        hideProgress();
+      }
     }
   </script>
 </body>
