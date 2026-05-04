@@ -394,9 +394,8 @@
     </div>
   </div>
 
+  <script src="/static/uploads.js"></script>
   <script>
-    const ACCEPT = new Set(["image/jpeg", "image/png", "image/webp"]);
-
     const groupsEl = document.getElementById("groups");
     const empty = document.getElementById("empty");
     const loading = document.getElementById("loading");
@@ -602,82 +601,10 @@
     });
 
     async function handleFiles(files) {
-      const accepted = files.filter(f => ACCEPT.has(f.type));
-      const rejected = files.length - accepted.length;
-      if (!accepted.length) {
-        setStatus(rejected ? `${rejected} unsupported file(s) skipped.` : "");
-        return;
-      }
-
-      setStatus(`Requesting upload URLs for ${accepted.length} photo(s)…`);
-      let uploads;
-      try {
-        const resp = await fetch("/api/uploads/presign", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            files: accepted.map(f => ({filename: f.name, content_type: f.type})),
-          }),
-        });
-        if (!resp.ok) throw new Error(`presign HTTP ${resp.status}`);
-        uploads = (await resp.json()).uploads;
-      } catch (err) {
-        setStatus(`Failed to get upload URLs: ${err.message}`);
-        return;
-      }
-
-      let done = 0;
-      const total = accepted.length;
-      const expectedIds = [];
-      const errors = [];
-      setStatus(`Uploading 0/${total}…`);
-
-      const uploadOne = async (file, info) => {
-        const r = await fetch(info.url, {
-          method: "PUT",
-          body: file,
-          headers: {"Content-Type": file.type},
-        });
-        if (!r.ok) throw new Error(`PUT ${file.name}: HTTP ${r.status}`);
-        expectedIds.push(info.photo_id);
-        done++;
-        setStatus(`Uploading ${done}/${total}…`);
-      };
-
-      await Promise.all(
-        accepted.map((f, i) => uploadOne(f, uploads[i]).catch(e => errors.push(e)))
-      );
-
-      if (errors.length) {
-        console.warn("Upload errors:", errors);
-        setStatus(`Uploaded ${done}/${total}. ${errors.length} failed. Processing…`);
-      } else {
-        setStatus(`Uploaded ${total}. Processing…`);
-      }
-
-      pollUntilProcessed(expectedIds);
-    }
-
-    async function pollUntilProcessed(ids) {
-      if (!ids.length) { setStatus(""); return; }
-      const TIMEOUT_MS = 60_000;
-      const INTERVAL_MS = 1500;
-      const start = Date.now();
-      while (true) {
-        await new Promise(r => setTimeout(r, INTERVAL_MS));
-        try {
-          const photos = await fetchPhotos();
-          renderPhotos(photos);
-          if (ids.every(id => knownPhotoIds.has(id))) {
-            setStatus("");
-            return;
-          }
-        } catch (_e) {}
-        if (Date.now() - start > TIMEOUT_MS) {
-          setStatus("Some photos still processing…");
-          return;
-        }
-      }
+      const result = await PhotoUploads.uploadFiles(files, {
+        onStatus: setStatus,
+      });
+      if (result.processed.length > 0) await refreshGallery();
     }
 
     function isAlbumModalOpen() {

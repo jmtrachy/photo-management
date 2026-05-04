@@ -8,7 +8,7 @@ from pathlib import Path
 import boto3
 from boto3.dynamodb.conditions import Key
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
@@ -56,6 +56,7 @@ memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
 
 ALBUM_TITLE_MAX_LEN = 200
 ADD_TO_ALBUM_MAX = 100
+PHOTOS_EXISTS_MAX = 1000
 
 _serializer: URLSafeTimedSerializer | None = None
 
@@ -160,6 +161,7 @@ _ALBUMS_HTML = _HERE.joinpath("albums.html").read_text()
 _ALBUM_HTML = _HERE.joinpath("album.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
 _LOGIN_SENT_HTML = _HERE.joinpath("login_sent.html").read_text()
+_UPLOADS_JS = _HERE.joinpath("uploads.js").read_text()
 
 
 app = FastAPI()
@@ -185,6 +187,11 @@ async def albums_page(_email: str = Depends(require_admin)):
 @app.get("/album/{album_id}", response_class=HTMLResponse)
 async def album_page(album_id: str, _email: str = Depends(require_admin)):
     return _ALBUM_HTML
+
+
+@app.get("/static/uploads.js")
+async def static_uploads_js():
+    return Response(content=_UPLOADS_JS, media_type="application/javascript")
 
 
 class CreateAlbumRequest(BaseModel):
@@ -489,6 +496,39 @@ async def list_photos(_email: str = Depends(require_admin)):
             }
         )
     return {"photos": photos, "cursor": None}
+
+
+class PhotosExistsRequest(BaseModel):
+    photo_ids: list[str]
+
+
+@app.post("/api/photos/exists")
+async def photos_exists(
+    payload: PhotosExistsRequest,
+    _email: str = Depends(require_admin),
+):
+    if not payload.photo_ids:
+        return {"exists": []}
+    if len(payload.photo_ids) > PHOTOS_EXISTS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot check more than {PHOTOS_EXISTS_MAX} photos at once",
+        )
+    exists: list[str] = []
+    for i in range(0, len(payload.photo_ids), 100):
+        chunk = payload.photo_ids[i : i + 100]
+        request_items: dict = {
+            PHOTOS_TABLE: {
+                "Keys": [{"photo_id": pid} for pid in chunk],
+                "ProjectionExpression": "photo_id",
+            }
+        }
+        while request_items:
+            resp = dynamodb.batch_get_item(RequestItems=request_items)
+            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
+                exists.append(p["photo_id"])
+            request_items = resp.get("UnprocessedKeys") or {}
+    return {"exists": exists}
 
 
 @app.get("/photo/{photo_id}", response_class=HTMLResponse)

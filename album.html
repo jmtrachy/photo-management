@@ -80,6 +80,41 @@
       font-variant-numeric: tabular-nums;
     }
 
+    .toolbar {
+      padding: 0.75rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .upload-btn {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.45rem 1rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .upload-btn:hover { filter: brightness(1.1); }
+    .upload-btn:disabled {
+      filter: grayscale(0.6);
+      cursor: not-allowed;
+    }
+    .upload-hint {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .status {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
     main { padding: 2rem; min-height: 50vh; }
 
     .grid {
@@ -127,6 +162,27 @@
       text-align: center;
     }
     .error { color: #b03030; font-style: normal; }
+
+    .drop-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(34, 102, 221, 0.08);
+      border: 4px dashed var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 100;
+      visibility: hidden;
+    }
+    .drop-overlay.visible { visibility: visible; }
+    .drop-overlay span {
+      background: var(--card);
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      font-size: 1.2rem;
+      color: var(--accent);
+    }
   </style>
 </head>
 <body>
@@ -142,11 +198,21 @@
     <h2 id="album-title">…</h2>
     <div id="album-meta" class="meta"></div>
   </div>
+  <div class="toolbar">
+    <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
+    <span class="upload-hint">or drag photos anywhere on this page</span>
+    <span id="status" class="status"></span>
+    <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+  </div>
   <main>
     <div id="loading" class="loading">Loading…</div>
     <div id="empty" class="empty" hidden>No photos in this album yet.</div>
     <div id="grid" class="grid" hidden></div>
   </main>
+  <div id="drop-overlay" class="drop-overlay">
+    <span>Drop to upload</span>
+  </div>
+  <script src="/static/uploads.js"></script>
   <script>
     const albumId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const titleEl = document.getElementById("album-title");
@@ -154,8 +220,13 @@
     const grid = document.getElementById("grid");
     const empty = document.getElementById("empty");
     const loading = document.getElementById("loading");
+    const statusEl = document.getElementById("status");
+    const uploadBtn = document.getElementById("upload-btn");
+    const fileInput = document.getElementById("file-input");
+    const dropOverlay = document.getElementById("drop-overlay");
 
     function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+    function setStatus(text) { statusEl.textContent = text || ""; }
 
     function takenDateParts(photo) {
       const d = new Date((photo.taken_at || photo.uploaded_at) * 1000);
@@ -207,10 +278,13 @@
         metaEl.textContent = `${pluralize(data.photos.length, "photo")} · ${pluralize(data.view_count ?? 0, "view")}`;
 
         loading.hidden = true;
+        grid.innerHTML = "";
         if (!data.photos.length) {
           empty.hidden = false;
+          grid.hidden = true;
           return;
         }
+        empty.hidden = true;
         grid.hidden = false;
         for (const p of data.photos) grid.appendChild(buildPhotoCard(p));
       } catch (err) {
@@ -220,6 +294,47 @@
     }
 
     load();
+
+    uploadBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) handleFiles(Array.from(fileInput.files));
+      fileInput.value = "";
+    });
+
+    let dragDepth = 0;
+    function isFileDrag(e) {
+      return e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+    }
+
+    window.addEventListener("dragenter", (e) => {
+      if (!isFileDrag(e)) return;
+      dragDepth++;
+      dropOverlay.classList.add("visible");
+      e.preventDefault();
+    });
+    window.addEventListener("dragleave", () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropOverlay.classList.remove("visible");
+    });
+    window.addEventListener("dragover", (e) => {
+      if (isFileDrag(e)) e.preventDefault();
+    });
+    window.addEventListener("drop", (e) => {
+      dragDepth = 0;
+      dropOverlay.classList.remove("visible");
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length) handleFiles(files);
+    });
+
+    async function handleFiles(files) {
+      const result = await PhotoUploads.uploadFiles(files, {
+        albumId,
+        onStatus: setStatus,
+      });
+      if (result.added > 0) await load();
+    }
   </script>
 </body>
 </html>
