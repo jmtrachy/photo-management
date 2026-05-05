@@ -169,7 +169,7 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
 
-        photoEl.src = data.medium_url;
+        photoEl.src = data.original_url;
         viewOriginal.href = data.original_url;
         downloadOriginal.href = data.download_url;
 
