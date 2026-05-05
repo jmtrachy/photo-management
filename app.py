@@ -278,10 +278,19 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
             },
             ExpiresIn=IMAGE_GET_TTL_SECONDS,
         )
+        medium_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": f"derivatives/{pid}/medium.jpg",
+            },
+            ExpiresIn=IMAGE_GET_TTL_SECONDS,
+        )
         photos.append(
             {
                 "photo_id": pid,
                 "thumb_url": thumb_url,
+                "medium_url": medium_url,
                 "taken_at": int(p.get("taken_at", 0)),
                 "uploaded_at": int(p.get("uploaded_at", 0)),
                 "view_count": int(p.get("view_count", 0)),
@@ -483,10 +492,19 @@ async def list_photos(_email: str = Depends(require_admin)):
             },
             ExpiresIn=IMAGE_GET_TTL_SECONDS,
         )
+        medium_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": f"derivatives/{photo_id}/medium.jpg",
+            },
+            ExpiresIn=IMAGE_GET_TTL_SECONDS,
+        )
         photos.append(
             {
                 "photo_id": photo_id,
                 "thumb_url": thumb_url,
+                "medium_url": medium_url,
                 "taken_at": int(item.get("taken_at", 0)),
                 "uploaded_at": int(item.get("uploaded_at", 0)),
                 "width": int(item.get("width", 0)),
