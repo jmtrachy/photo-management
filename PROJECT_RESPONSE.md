@@ -17,7 +17,7 @@ operational patterns.
 
 ## 2. Core domain model
 
-Four logical entities. DynamoDB single-table is probably overkill for this scale — a
+Five logical entities. DynamoDB single-table is probably overkill for this scale — a
 few tables keeps it readable:
 
 - **Photo** — `photo_id`, `s3_key`, `uploaded_at`, `original_filename`, `width`,
@@ -33,12 +33,28 @@ few tables keeps it readable:
     renders from a single Query with no follow-up `BatchGetItem`
 - **Share** — `share_id`, `album_id`, `name` (admin-facing label, e.g.
   "Sent to Jane", "Vermont trip — public"), `created_at`, `view_count`
+- **PhotoTag** — the photo↔tag many-to-many. One item per (photo, tag) pair:
+  - PK: `TAG#<tag_name>` (lowercased), SK: `PHOTO#<photo_id>`, plus `taken_at` for grid ordering
+  - The Photo item also carries a `tags` String Set so the detail view renders the tag list from a single GetItem — no inverse Query needed
 
 **Why memberships instead of an `album_ids` Set on Photo:** DynamoDB GSI partition
 keys must be scalars, so a Set attribute can't be inverted with a GSI. Adjacency-list
 memberships are the canonical many-to-many pattern — tag/untag is one `PutItem` or
 `DeleteItem`, "list photos in album X" is one Query against the base table, "list
 albums for photo Y" is one Query against the GSI. No duplication to keep in sync.
+
+**Tagging works the same way — separate `PhotoTags` table for the same reasons.**
+Querying "all photos with tag X" is one `Query(PK=TAG#<name>)` followed by a
+`BatchGetItem` for the photo rows. Tag/untag is a `TransactWriteItems` that
+writes/deletes the `PhotoTags` row, mutates the Photo's `tags` Set, and toggles
+an `untagged_marker` attribute on the Photo — three writes that succeed or fail
+together. So tagging a photo with three tags is three new `PhotoTags` rows plus
+the Photo update in a single transaction. The marker exists only when the Set is
+empty; a sparse GSI on the Photo table keyed on `untagged_marker` makes the
+"Untagged" view a single `Query` (tagged photos drop out of the index
+automatically). Canonicalize tag names to lowercased + trimmed on write; if you
+want to preserve original casing for display, store it as a separate attribute
+on the `PhotoTags` row.
 
 **View tracking.** Three counters capture public engagement, all incremented only
 on non-admin traffic (admin sessions detected by auth token/cookie and skipped):
