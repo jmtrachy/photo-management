@@ -2,11 +2,13 @@ import json
 import logging
 import os
 import secrets
+import string
 import time
 from pathlib import Path
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
+from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -21,6 +23,7 @@ LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
 PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
 MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
+SHARES_TABLE = os.environ["SHARES_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
@@ -53,10 +56,15 @@ tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
 photos_table = dynamodb.Table(PHOTOS_TABLE)
 albums_table = dynamodb.Table(ALBUMS_TABLE)
 memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
+shares_table = dynamodb.Table(SHARES_TABLE)
 
 ALBUM_TITLE_MAX_LEN = 200
 ADD_TO_ALBUM_MAX = 100
 PHOTOS_EXISTS_MAX = 1000
+
+SHARE_SLUG_LEN = 8
+SHARE_SLUG_ALPHABET = string.ascii_letters + string.digits
+SHARE_SLUG_MAX_ATTEMPTS = 5
 
 _serializer: URLSafeTimedSerializer | None = None
 
@@ -159,6 +167,7 @@ _INDEX_HTML = _HERE.joinpath("index.html").read_text()
 _PHOTO_HTML = _HERE.joinpath("photo.html").read_text()
 _ALBUMS_HTML = _HERE.joinpath("albums.html").read_text()
 _ALBUM_HTML = _HERE.joinpath("album.html").read_text()
+_PUBLIC_ALBUM_HTML = _HERE.joinpath("public_album.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
 _LOGIN_SENT_HTML = _HERE.joinpath("login_sent.html").read_text()
 _UPLOADS_JS = _HERE.joinpath("uploads.js").read_text()
@@ -430,6 +439,140 @@ async def add_photos_to_album(
         )
     )
     return {"added": added, "title": album["title"], "album_id": album_id}
+
+
+def generate_share_slug() -> str:
+    return "".join(secrets.choice(SHARE_SLUG_ALPHABET) for _ in range(SHARE_SLUG_LEN))
+
+
+def share_public_url(share_id: str) -> str:
+    return f"{BASE_URL}/a/{share_id}"
+
+
+@app.post("/api/albums/{album_id}/shares")
+async def create_album_share(album_id: str, _email: str = Depends(require_admin)):
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    now = int(time.time())
+    for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
+        share_id = generate_share_slug()
+        try:
+            shares_table.put_item(
+                Item={
+                    "share_id": share_id,
+                    "album_id": album_id,
+                    "created_at": now,
+                    "view_count": 0,
+                },
+                ConditionExpression="attribute_not_exists(share_id)",
+            )
+            break
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+    else:
+        raise HTTPException(status_code=500, detail="Could not generate unique share id")
+
+    logger.info(
+        json.dumps(
+            {"event": "share_created", "album_id": album_id, "share_id": share_id}
+        )
+    )
+    return {
+        "share_id": share_id,
+        "album_id": album_id,
+        "created_at": now,
+        "public_url": share_public_url(share_id),
+    }
+
+
+@app.get("/api/albums/{album_id}/shares")
+async def list_album_shares(album_id: str, _email: str = Depends(require_admin)):
+    items: list[dict] = []
+    last_key = None
+    while True:
+        kw: dict = {"FilterExpression": Attr("album_id").eq(album_id)}
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = shares_table.scan(**kw)
+        items.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    items.sort(key=lambda s: int(s.get("created_at", 0)), reverse=True)
+    shares = [
+        {
+            "share_id": s["share_id"],
+            "album_id": s["album_id"],
+            "created_at": int(s.get("created_at", 0)),
+            "view_count": int(s.get("view_count", 0)),
+            "public_url": share_public_url(s["share_id"]),
+        }
+        for s in items
+    ]
+    return {"shares": shares}
+
+
+@app.get("/a/{share_id}", response_class=HTMLResponse)
+async def public_album_page(share_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    return _PUBLIC_ALBUM_HTML
+
+
+@app.get("/api/public/shares/{share_id}")
+async def get_public_album(share_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    album_id = share["album_id"]
+
+    item = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+
+    memberships: list[dict] = []
+    last_key = None
+    while True:
+        kw: dict = {"KeyConditionExpression": Key("pk").eq(f"ALBUM#{album_id}")}
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = memberships_table.query(**kw)
+        memberships.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
+    photo_ids = [m["sk"].split("#", 1)[1] for m in memberships]
+
+    photos = []
+    for pid in photo_ids:
+        medium_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": PHOTOS_BUCKET,
+                "Key": f"derivatives/{pid}/medium.jpg",
+            },
+            ExpiresIn=IMAGE_GET_TTL_SECONDS,
+        )
+        photos.append({"photo_id": pid, "medium_url": medium_url})
+
+    return {
+        "album_id": album_id,
+        "title": item.get("title", ""),
+        "photos": photos,
+    }
 
 
 class PresignFile(BaseModel):

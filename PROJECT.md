@@ -76,3 +76,19 @@ Notes:
 * One toast per batch, not one per photo
 * The toast fires on Lambda completion (step 3), not on the S3 PUT (step 2), because the Photo records don't exist yet at step 2 — see `PROJECT_RESPONSE.md` §8 for the completion mechanism
 
+### 5 - As an Admin I can tag photos and browse by tag
+Tags are informal, free-form labels distinct from albums. Each photo supports 1..n tags.
+1. From the photo detail view (Story 3), I can add or remove tags. Tags are free-form text I type in.
+2. A "Tags" navigation element lists every tag I've used, with a count of photos per tag. Clicking a tag opens a grid of every photo carrying that tag, ordered most-recently-taken first, with infinite scroll.
+3. The same view includes an "Untagged" entry — all photos with zero tags — so I can find ones still needing categorization.
+4. Tag-photo relationships live in a separate `PhotoTags` table; see `PROJECT_RESPONSE.md` §2 for the data model.
+
+### 6 - As an admin I can create a shareable link to an album
+When viewing any album a "share" icon exists which generates a shortened version of a URL to the public viewing of that album. 
+1. The link is immediately put into the user's clipboard
+2. The link has the structure https://photos.jamestrachy.com/a/<hashed-8-character-slug>
+3. The link is stored in alongside the album in Dynamo
+4. Multiple links per album can be created - every time the button is presses
+5. The link is shown thereafter on the admin's view of the albums page so it can be grabbed again
+6. The link provides access to non-authenticated users to the album. The album view for unauthenticated users should be similar to the view by admins, except it doesn't have any actions available, doesn't show a menu, doesn't show a Sign Out, and doesn't show the available links.
+

@@ -109,6 +109,16 @@ class PhotoManagementStack(Stack):
             time_to_live_attribute="expires_at",
         )
 
+        shares_table = dynamodb.Table(
+            self,
+            "SharesTable",
+            partition_key=dynamodb.Attribute(
+                name="share_id", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
         photos_bucket = s3.Bucket(
             self,
             "PhotosBucket",
@@ -182,6 +192,7 @@ class PhotoManagementStack(Stack):
                 "PHOTOS_TABLE": photos_table.table_name,
                 "ALBUMS_TABLE": albums_table.table_name,
                 "MEMBERSHIPS_TABLE": memberships_table.table_name,
+                "SHARES_TABLE": shares_table.table_name,
                 "PHOTOS_BUCKET": photos_bucket.bucket_name,
                 "ADMIN_EMAILS": ADMIN_EMAILS,
                 "FROM_EMAIL": FROM_EMAIL,
@@ -193,6 +204,7 @@ class PhotoManagementStack(Stack):
         photos_table.grant_read_data(fn)
         albums_table.grant_read_write_data(fn)
         memberships_table.grant_read_write_data(fn)
+        shares_table.grant_read_write_data(fn)
         photos_bucket.grant_read_write(fn)
 
         derivatives_fn = _lambda.DockerImageFunction(
@@ -279,5 +291,6 @@ class PhotoManagementStack(Stack):
         CfnOutput(self, "PhotosTableName", value=photos_table.table_name)
         CfnOutput(self, "AlbumsTableName", value=albums_table.table_name)
         CfnOutput(self, "MembershipsTableName", value=memberships_table.table_name)
+        CfnOutput(self, "SharesTableName", value=shares_table.table_name)
         CfnOutput(self, "LoginTokensTableName", value=login_tokens_table.table_name)
         CfnOutput(self, "EmailIdentityName", value=email_identity.email_identity_name)

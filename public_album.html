@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Album</title>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --fg: #222;
+      --muted: #888;
+      --border: #e5e5e5;
+      --card: #ffffff;
+      --accent: #2266dd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .album-header {
+      padding: 1.5rem 2rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .album-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .album-header .meta {
+      margin-top: 0.35rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    main { padding: 2rem; min-height: 50vh; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+      gap: 1rem;
+    }
+    .photo-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .photo-card .thumb {
+      aspect-ratio: 1;
+      width: 100%;
+      overflow: hidden;
+    }
+    .photo-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .empty, .loading, .error {
+      color: var(--muted);
+      font-style: italic;
+      padding: 4rem 1rem;
+      text-align: center;
+    }
+    .error { color: #b03030; font-style: normal; }
+  </style>
+</head>
+<body>
+  <div class="album-header">
+    <h1 id="album-title">…</h1>
+    <div id="album-meta" class="meta"></div>
+  </div>
+  <main>
+    <div id="loading" class="loading">Loading…</div>
+    <div id="empty" class="empty" hidden>No photos in this album yet.</div>
+    <div id="grid" class="grid" hidden></div>
+  </main>
+  <script>
+    const shareId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
+    const titleEl = document.getElementById("album-title");
+    const metaEl = document.getElementById("album-meta");
+    const grid = document.getElementById("grid");
+    const empty = document.getElementById("empty");
+    const loading = document.getElementById("loading");
+
+    function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+
+    function buildPhotoCard(photo) {
+      const card = document.createElement("div");
+      card.className = "photo-card";
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
+      const img = document.createElement("img");
+      img.src = photo.medium_url;
+      img.alt = "";
+      img.loading = "lazy";
+      thumb.appendChild(img);
+      card.appendChild(thumb);
+      return card;
+    }
+
+    async function load() {
+      try {
+        const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        titleEl.textContent = data.title || "Untitled album";
+        document.title = data.title || "Album";
+        metaEl.textContent = pluralize(data.photos.length, "photo");
+
+        loading.hidden = true;
+        grid.innerHTML = "";
+        if (!data.photos.length) {
+          empty.hidden = false;
+          grid.hidden = true;
+          return;
+        }
+        empty.hidden = true;
+        grid.hidden = false;
+        for (const p of data.photos) grid.appendChild(buildPhotoCard(p));
+      } catch (err) {
+        loading.className = "error";
+        loading.textContent = `Failed to load album: ${err.message}`;
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

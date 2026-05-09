@@ -109,10 +109,76 @@
       color: var(--muted);
       font-size: 0.9rem;
     }
+    .share-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.45rem 0.85rem;
+      background: var(--card);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .share-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .share-btn:disabled {
+      filter: grayscale(0.6);
+      cursor: not-allowed;
+    }
     .status {
       margin-left: auto;
       color: var(--muted);
       font-size: 0.9rem;
+    }
+
+    .shares {
+      padding: 0.75rem 2rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .shares-title {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .shares-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .share-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.85rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .share-link {
+      color: var(--accent);
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .share-link:hover { text-decoration: underline; }
+    .share-copy {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.15rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .share-copy:hover { border-color: var(--accent); color: var(--accent); }
+    .share-empty {
+      font-size: 0.85rem;
+      color: var(--muted);
+      font-style: italic;
     }
 
     main { padding: 2rem; min-height: 50vh; }
@@ -219,8 +285,15 @@
   <div class="toolbar">
     <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
     <span class="upload-hint">or drag photos anywhere on this page</span>
+    <button id="share-btn" class="share-btn" type="button" title="Create a shareable link">
+      <span aria-hidden="true">🔗</span> Share
+    </button>
     <span id="status" class="status"></span>
     <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+  </div>
+  <div class="shares" id="shares" hidden>
+    <div class="shares-title">Share links</div>
+    <div id="shares-list" class="shares-list"></div>
   </div>
   <main>
     <div id="loading" class="loading">Loading…</div>
@@ -245,6 +318,9 @@
     const dropOverlay = document.getElementById("drop-overlay");
     const progressEl = document.getElementById("progress");
     const progressFillEl = document.getElementById("progress-fill");
+    const shareBtn = document.getElementById("share-btn");
+    const sharesContainer = document.getElementById("shares");
+    const sharesList = document.getElementById("shares-list");
 
     function updateProgress({ done, total }) {
       progressEl.classList.add("active");
@@ -371,6 +447,81 @@
         hideProgress();
       }
     }
+
+    function renderShares(shares) {
+      sharesList.innerHTML = "";
+      if (!shares.length) {
+        sharesContainer.hidden = true;
+        return;
+      }
+      sharesContainer.hidden = false;
+      for (const s of shares) {
+        const row = document.createElement("div");
+        row.className = "share-row";
+
+        const a = document.createElement("a");
+        a.className = "share-link";
+        a.href = s.public_url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = s.public_url;
+
+        const copy = document.createElement("button");
+        copy.className = "share-copy";
+        copy.type = "button";
+        copy.textContent = "Copy";
+        copy.addEventListener("click", () => copyToClipboard(s.public_url, copy));
+
+        row.appendChild(a);
+        row.appendChild(copy);
+        sharesList.appendChild(row);
+      }
+    }
+
+    async function copyToClipboard(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+        if (btn) {
+          const original = btn.textContent;
+          btn.textContent = "Copied";
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        }
+      } catch (_e) {
+        setStatus("Copy failed — link selected, press ⌘C");
+      }
+    }
+
+    async function loadShares() {
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/shares`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        renderShares(data.shares || []);
+      } catch (_e) {
+        sharesContainer.hidden = true;
+      }
+    }
+
+    loadShares();
+
+    shareBtn.addEventListener("click", async () => {
+      shareBtn.disabled = true;
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/shares`, {
+          method: "POST",
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        await copyToClipboard(data.public_url);
+        setStatus(`Link copied: ${data.public_url}`);
+        setTimeout(() => setStatus(""), 4000);
+        await loadShares();
+      } catch (err) {
+        setStatus(`Share failed: ${err.message}`);
+      } finally {
+        shareBtn.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>
