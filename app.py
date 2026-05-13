@@ -470,6 +470,39 @@ async def add_photos_to_album(
     return {"added": added, "title": album["title"], "album_id": album_id}
 
 
+@app.post("/api/albums/{album_id}/reset-counts")
+async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)):
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    photo_ids = _album_photo_ids_in_order(album_id)
+
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="SET view_count = :zero, download_count = :zero",
+        ExpressionAttributeValues={":zero": 0},
+    )
+
+    for pid in photo_ids:
+        photos_table.update_item(
+            Key={"photo_id": pid},
+            UpdateExpression="SET view_count = :zero, download_count = :zero",
+            ExpressionAttributeValues={":zero": 0},
+        )
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "album_counts_reset",
+                "album_id": album_id,
+                "photo_count": len(photo_ids),
+            }
+        )
+    )
+    return {"album_id": album_id, "photos_reset": len(photo_ids)}
+
+
 def generate_share_slug() -> str:
     return "".join(secrets.choice(SHARE_SLUG_ALPHABET) for _ in range(SHARE_SLUG_LEN))
 
