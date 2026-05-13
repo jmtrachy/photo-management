@@ -24,7 +24,13 @@
       padding: 1.5rem 2rem;
       border-bottom: 1px solid var(--border);
       background: var(--card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
     }
+    .album-header .title-block { min-width: 0; }
     .album-header h1 {
       margin: 0;
       font-size: 1.5rem;
@@ -37,6 +43,31 @@
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
+    .download-all-btn {
+      flex: 0 0 auto;
+      padding: 0.5rem 1rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .download-all-btn:hover { filter: brightness(1.1); }
+    .download-all-btn:disabled {
+      filter: grayscale(0.4);
+      cursor: progress;
+    }
+    .download-all-btn[hidden] { display: none; }
+    .download-error {
+      flex-basis: 100%;
+      color: #b03030;
+      font-size: 0.85rem;
+      margin-top: 0.25rem;
+    }
+    .download-error[hidden] { display: none; }
 
     main { padding: 2rem; min-height: 50vh; }
 
@@ -78,8 +109,12 @@
 </head>
 <body>
   <div class="album-header">
-    <h1 id="album-title">…</h1>
-    <div id="album-meta" class="meta"></div>
+    <div class="title-block">
+      <h1 id="album-title">…</h1>
+      <div id="album-meta" class="meta"></div>
+    </div>
+    <button id="download-all-btn" class="download-all-btn" type="button" hidden>Download all</button>
+    <div id="download-error" class="download-error" hidden></div>
   </div>
   <main>
     <div id="loading" class="loading">Loading…</div>
@@ -93,6 +128,8 @@
     const grid = document.getElementById("grid");
     const empty = document.getElementById("empty");
     const loading = document.getElementById("loading");
+    const downloadBtn = document.getElementById("download-all-btn");
+    const downloadError = document.getElementById("download-error");
 
     function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 
@@ -131,11 +168,40 @@
         empty.hidden = true;
         grid.hidden = false;
         for (const p of data.photos) grid.appendChild(buildPhotoCard(p));
+        downloadBtn.hidden = false;
       } catch (err) {
         loading.className = "error";
         loading.textContent = `Failed to load album: ${err.message}`;
       }
     }
+
+    async function downloadAll() {
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = "Building zip…";
+      downloadError.hidden = true;
+      downloadError.textContent = "";
+      try {
+        const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}/download`);
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        window.location.href = data.download_url;
+      } catch (err) {
+        downloadError.textContent = `Download failed: ${err.message}`;
+        downloadError.hidden = false;
+      } finally {
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = "Download all";
+      }
+    }
+
+    downloadBtn.addEventListener("click", downloadAll);
 
     load();
   </script>

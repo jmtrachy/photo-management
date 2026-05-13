@@ -506,6 +506,7 @@
 
     shareBtn.addEventListener("click", async () => {
       shareBtn.disabled = true;
+      setStatus("Building zip…");
       try {
         const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/shares`, {
           method: "POST",
