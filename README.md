@@ -12,9 +12,9 @@ Working features, mapped to user stories in `PROJECT.md`:
 - **Story 3** (partial) — photo detail at `/photo/{id}` with medium image, prev/next arrow navigation across all photos by taken-at, and view/download original links. EXIF panel, album-membership list, and delete cascade not yet built.
 - **Story 4** — drag-and-drop upload via presigned S3 PUT; the derivatives Lambda generates `thumb`/`medium` images, extracts EXIF (taken-at), and writes the Photo record. "Add to album" modal tags the batch into an existing album.
 - **Story 6** — `POST /api/albums/{id}/shares` issues an 8-char slug at `/a/<slug>`; per-album share list shown in the admin album view and copyable.
-- **Story 7** — unauthenticated viewer at `/a/{share_id}` (album grid) and `/a/{share_id}/{photo_id}` (full-bleed photo with translucent prev/next arrows, responsive image size — original for viewport ≥ 1024px, medium below — and a tracked "Download Full Res image" link). Album view increments `Album.view_count`; downloads increment `Photo.download_count`.
+- **Story 7** — unauthenticated viewer at `/a/{share_id}` (album grid) and `/a/{share_id}/{photo_id}` (full-bleed photo with translucent prev/next arrows, responsive image size — original for viewport ≥ 1024px, medium below — and a tracked "Download Full Res image" link). Album view increments `Album.view_count`; per-photo view increments `Photo.view_count`; downloads increment `Photo.download_count`.
 
-Not yet built: Story 3's EXIF/album-list/delete pieces, Story 5 (tagging), per-photo `view_count` increment on public photo views, the cost-estimator widget (PROJECT.md §"Management Console").
+Not yet built: Story 3's EXIF/album-list/delete pieces, Story 5 (tagging), the cost-estimator widget (PROJECT.md §"Management Console").
 
 Supporting infrastructure:
 - Magic-link sign-in (email allowlist) via SES; session cookies signed with `itsdangerous` (30-day max-age, HttpOnly + Secure + SameSite=Lax)

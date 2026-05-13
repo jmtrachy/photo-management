@@ -638,6 +638,22 @@ async def get_public_photo(share_id: str, photo_id: str):
     prev_photo_id = photo_ids[idx - 1] if idx > 0 else None
     next_photo_id = photo_ids[idx + 1] if idx + 1 < len(photo_ids) else None
 
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "public_photo_viewed",
+                "share_id": share_id,
+                "album_id": album_id,
+                "photo_id": photo_id,
+            }
+        )
+    )
+
     s3_key = photo["s3_key"]
     ext = s3_key.rsplit(".", 1)[-1].lower()
     original_url = s3_client.generate_presigned_url(
