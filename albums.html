@@ -293,11 +293,13 @@
       title.className = "album-title";
       title.textContent = album.title;
       title.title = album.title;
-      const views = document.createElement("div");
-      views.className = "album-views";
-      views.textContent = pluralize(album.view_count ?? 0, "view");
+      const stats = document.createElement("div");
+      stats.className = "album-views";
+      const views = pluralize(album.view_count ?? 0, "view");
+      const downloads = pluralize(album.download_count ?? 0, "download");
+      stats.textContent = `${views} · ${downloads}`;
       meta.appendChild(title);
-      meta.appendChild(views);
+      meta.appendChild(stats);
       card.appendChild(meta);
 
       return card;

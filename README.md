@@ -11,15 +11,15 @@ Working features, mapped to user stories in `PROJECT.md`:
 - **Story 2** — recent-photos grid at `/` with date dividers and per-photo view/download counts
 - **Story 3** (partial) — photo detail at `/photo/{id}` with medium image, prev/next arrow navigation across all photos by taken-at, and view/download original links. EXIF panel, album-membership list, and delete cascade not yet built.
 - **Story 4** — drag-and-drop upload via presigned S3 PUT; the derivatives Lambda generates `thumb`/`medium` images, extracts EXIF (taken-at), and writes the Photo record. "Add to album" modal tags the batch into an existing album.
-- **Story 6** — `POST /api/albums/{id}/shares` issues an 8-char slug at `/a/<slug>`; per-album share list shown in the admin album view and copyable.
-- **Story 7** — unauthenticated viewer at `/a/{share_id}` (album grid) and `/a/{share_id}/{photo_id}` (full-bleed photo with translucent prev/next arrows, responsive image size — original for viewport ≥ 1024px, medium below — and a tracked "Download Full Res image" link). Album view increments `Album.view_count`; per-photo view increments `Photo.view_count`; downloads increment `Photo.download_count`.
+- **Story 6** — `POST /api/albums/{id}/shares` issues an 8-char slug at `/a/<slug>` and synchronously builds the album zip at `s3://.../zips/{share_id}.zip` so the public download is a presign-only operation; per-album share list shown in the admin album view and copyable.
+- **Story 7** — unauthenticated viewer at `/a/{share_id}` (album grid with a "Download all" button that returns the presigned zip URL and triggers the browser download) and `/a/{share_id}/{photo_id}` (full-bleed photo with translucent prev/next arrows, responsive image size — original for viewport ≥ 1024px, medium below — and a tracked "Download Full Res image" link). Album view increments `Album.view_count`; album zip download increments `Album.download_count`; per-photo view increments `Photo.view_count`; per-photo download increments `Photo.download_count`. The admin albums grid shows both album view and download counts. If the cached zip has aged out (30-day S3 lifecycle), the download endpoint rebuilds it on demand.
 
 Not yet built: Story 3's EXIF/album-list/delete pieces, Story 5 (tagging), the cost-estimator widget (PROJECT.md §"Management Console").
 
 Supporting infrastructure:
 - Magic-link sign-in (email allowlist) via SES; session cookies signed with `itsdangerous` (30-day max-age, HttpOnly + Secure + SameSite=Lax)
 - DynamoDB tables: `Photos`, `Albums`, `Memberships`, `Shares`, `LoginTokens` (all `PAY_PER_REQUEST`, `DESTROY` removal policy)
-- S3 photos bucket: `originals/<photo_id>.<ext>` (private, presigned access) and `derivatives/<photo_id>/{thumb,medium}.jpg`
+- S3 photos bucket: `originals/<photo_id>.<ext>` (private, presigned access), `derivatives/<photo_id>/{thumb,medium}.jpg`, and `zips/<share_id>.zip` (built when the share is created, lifecycle-expired after 30 days, rebuilt on demand if missing)
 - Two Lambdas in one stack: the FastAPI/Mangum API and a derivatives processor triggered by S3 `ObjectCreated` on `originals/`
 - Error-logging middleware in `app.py` emits a single JSON CloudWatch record per unhandled exception (event, method, path, exception type/message, full traceback)
 
@@ -133,12 +133,13 @@ and redeploy.
   - `POST /api/albums` — create album
   - `POST /api/albums/{id}/photos` — tag photos into an album
   - `POST /api/uploads/presign` — issue presigned S3 PUT URLs
-  - `POST /api/albums/{id}/shares`, `GET /api/albums/{id}/shares` — create / list share links
+  - `POST /api/albums/{id}/shares`, `GET /api/albums/{id}/shares` — create / list share links. POST also builds `zips/{share_id}.zip` synchronously.
   - `GET /a/{share_id}` — public album viewer (no auth)
   - `GET /a/{share_id}/{photo_id}` — public photo viewer (no auth)
   - `GET /api/public/shares/{share_id}` — JSON for the public album viewer
-  - `GET /api/public/shares/{share_id}/photos/{photo_id}` — JSON for the public photo viewer
-  - `GET /api/public/shares/{share_id}/photos/{photo_id}/download` — increments `download_count`, 302s to a presigned URL with `Content-Disposition: attachment`
+  - `GET /api/public/shares/{share_id}/download` — increments `Album.download_count`, presigns `zips/{share_id}.zip` (rebuilding it first if it has expired from S3), returns JSON `{download_url, filename}` for the page to redirect to
+  - `GET /api/public/shares/{share_id}/photos/{photo_id}` — JSON for the public photo viewer, increments `Photo.view_count`
+  - `GET /api/public/shares/{share_id}/photos/{photo_id}/download` — increments `Photo.download_count`, 302s to a presigned URL with `Content-Disposition: attachment`
   - `GET /login`, `POST /login`, `GET /login/verify?token=...`, `GET /logout` — auth
 - `derivatives.py` — separate Lambda triggered by S3 `ObjectCreated` on `originals/`. Generates `derivatives/{photo_id}/thumb.jpg` and `medium.jpg`, extracts EXIF, writes the Photo record to DynamoDB.
 - `index.html`, `albums.html`, `album.html`, `photo.html` — admin HTML pages (vanilla HTML/CSS/JS)

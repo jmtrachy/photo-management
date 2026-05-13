@@ -142,6 +142,10 @@ class PhotoManagementStack(Stack):
                 s3.LifecycleRule(
                     noncurrent_version_expiration=Duration.days(30),
                 ),
+                s3.LifecycleRule(
+                    prefix="zips/",
+                    expiration=Duration.days(30),
+                ),
             ],
             removal_policy=RemovalPolicy.RETAIN,
         )
@@ -184,8 +188,8 @@ class PhotoManagementStack(Stack):
                 docker_dir, platform=docker_platform
             ),
             architecture=arch,
-            memory_size=512,
-            timeout=Duration.seconds(30),
+            memory_size=1024,
+            timeout=Duration.minutes(5),
             environment={
                 "COOKIE_SECRET_SSM_PARAM": COOKIE_SECRET_SSM_PARAM,
                 "LOGIN_TOKENS_TABLE": login_tokens_table.table_name,

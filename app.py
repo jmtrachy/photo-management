@@ -2,9 +2,12 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import string
+import tempfile
 import time
 import traceback
+import zipfile
 from pathlib import Path
 
 import boto3
@@ -257,6 +260,7 @@ async def list_albums(_email: str = Depends(require_admin)):
                 "album_id": item["album_id"],
                 "title": item.get("title", ""),
                 "view_count": int(item.get("view_count", 0)),
+                "download_count": int(item.get("download_count", 0)),
                 "created_at": int(item.get("created_at", 0)),
                 "cover_photo_id": cover_photo_id,
                 "cover_thumb_url": cover_thumb_url,
@@ -347,6 +351,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
         "album_id": album_id,
         "title": item.get("title", ""),
         "view_count": int(item.get("view_count", 0)),
+        "download_count": int(item.get("download_count", 0)),
         "created_at": int(item.get("created_at", 0)),
         "cover_photo_id": cover_photo_id,
         "cover_thumb_url": cover_thumb_url,
@@ -504,6 +509,19 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
             {"event": "share_created", "album_id": album_id, "share_id": share_id}
         )
     )
+
+    included = _build_album_zip(album_id, _share_zip_key(share_id))
+    logger.info(
+        json.dumps(
+            {
+                "event": "share_zip_built",
+                "share_id": share_id,
+                "album_id": album_id,
+                "photo_count": included,
+            }
+        )
+    )
+
     return {
         "share_id": share_id,
         "album_id": album_id,
@@ -599,6 +617,123 @@ async def get_public_album(share_id: str):
         "album_id": album_id,
         "title": item.get("title", ""),
         "photos": photos,
+    }
+
+
+def _sanitize_zip_filename(s: str) -> str:
+    cleaned = "".join(
+        c if c.isalnum() or c in "-_. " else "_" for c in s
+    ).strip()
+    return cleaned or "album"
+
+
+def _share_zip_key(share_id: str) -> str:
+    return f"zips/{share_id}.zip"
+
+
+def _zip_exists(zip_key: str) -> bool:
+    try:
+        s3_client.head_object(Bucket=PHOTOS_BUCKET, Key=zip_key)
+        return True
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def _build_album_zip(album_id: str, zip_key: str) -> int:
+    photo_ids = _album_photo_ids_in_order(album_id)
+    if not photo_ids:
+        return 0
+
+    photo_by_id: dict = {}
+    for i in range(0, len(photo_ids), 100):
+        chunk = photo_ids[i : i + 100]
+        request_items: dict = {
+            PHOTOS_TABLE: {"Keys": [{"photo_id": pid} for pid in chunk]}
+        }
+        while request_items:
+            resp = dynamodb.batch_get_item(RequestItems=request_items)
+            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
+                photo_by_id[p["photo_id"]] = p
+            request_items = resp.get("UnprocessedKeys") or {}
+
+    included = 0
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as tmp:
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_STORED) as zf:
+            for pid in photo_ids:
+                photo = photo_by_id.get(pid)
+                if not photo:
+                    continue
+                s3_key = photo["s3_key"]
+                ext = s3_key.rsplit(".", 1)[-1].lower()
+                obj = s3_client.get_object(Bucket=PHOTOS_BUCKET, Key=s3_key)
+                with zf.open(f"{pid}.{ext}", "w") as entry:
+                    shutil.copyfileobj(obj["Body"], entry)
+                included += 1
+        s3_client.upload_file(tmp.name, PHOTOS_BUCKET, zip_key)
+
+    return included
+
+
+@app.get("/api/public/shares/{share_id}/download")
+async def download_public_album(share_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    album_id = share["album_id"]
+
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    zip_key = _share_zip_key(share_id)
+    if not _zip_exists(zip_key):
+        included = _build_album_zip(album_id, zip_key)
+        if included == 0:
+            raise HTTPException(status_code=400, detail="Album is empty")
+        logger.info(
+            json.dumps(
+                {
+                    "event": "share_zip_rebuilt",
+                    "share_id": share_id,
+                    "album_id": album_id,
+                    "photo_count": included,
+                }
+            )
+        )
+
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="ADD download_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+
+    filename = f"{_sanitize_zip_filename(album.get('title', '') or 'album')}.zip"
+    download_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": zip_key,
+            "ResponseContentDisposition": f'attachment; filename="{filename}"',
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "public_album_downloaded",
+                "share_id": share_id,
+                "album_id": album_id,
+                "zip_key": zip_key,
+            }
+        )
+    )
+
+    return {
+        "download_url": download_url,
+        "filename": filename,
     }
 
 

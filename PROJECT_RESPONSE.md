@@ -112,7 +112,9 @@ behavior backed by Origin Access Control, keep `originals/*` presigned + tracked
 (single-photo viewer at `/a/{share_id}/{photo_id}`). Photo viewer is full-bleed with
 translucent prev/next arrows scoped to the album's `taken_at`-desc order, picks
 medium-size on viewports < 1024px and full-res above, and offers a "Download Full Res
-image" text link (not a button) below the image.
+image" text link (not a button) below the image. The album grid now also carries a
+"Download all" button that returns a presigned URL to a precomputed album-zip and
+triggers the browser download via JS.
 
 ## 5. Shareable link flow
 
@@ -133,6 +135,12 @@ and `POST /api/albums/{id}/shares` returns the `/a/` URL directly. `Share.view_c
 is reserved in the schema but never incremented; only `Album.view_count` bumps when the
 public viewer loads. Slugs are 8 chars (not 6) over `[a-zA-Z0-9]`. The admin create
 endpoint takes no `name` field yet — the share row is identified by slug + `created_at`.
+Share creation also synchronously builds a zip of every photo in the album and uploads
+it to `s3://.../zips/{share_id}.zip` (30-day S3 lifecycle), so the public "Download all"
+becomes a presign-only operation. If the zip ages out, the download endpoint rebuilds
+it on demand from the current album contents — note this means adds/removes between
+share creation and a delayed download won't appear until the cached zip expires and is
+rebuilt, an accepted trade-off for keeping downloads instant.
 
 **Why two endpoints / why the 302.** `Share.view_count` measures
 link-distribution reach; `Album.view_count` measures actual album views. These
@@ -186,6 +194,12 @@ could later build a little dashboard.
 (scoped to a share, not a naked photo_id). Same behavior — atomic `ADD download_count :1`,
 then 302 to a presigned URL with `Content-Disposition: attachment`. Logs a single
 `public_photo_downloaded` structured event per call. No admin-side download endpoint exists yet.
+
+There's also a third place a download can happen: **"Download all" on the public album**
+(`GET /api/public/shares/{share_id}/download`). Atomically `ADD download_count :1` on
+the `Album` record (new counter, displayed alongside `view_count` on the admin albums
+grid), then returns JSON `{download_url, filename}` pointing at the precomputed
+`zips/{share_id}.zip` (see §5). The endpoint rebuilds the zip if it's missing.
 
 ## 7. Admin console
 
