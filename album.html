@@ -19,71 +19,90 @@
       margin: 0;
       background: var(--bg);
       color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
     }
-    header {
-      padding: 1.5rem 2rem 1.25rem;
+    .top-header {
+      flex: 0 0 auto;
+      padding: 0.55rem 1.25rem;
       border-bottom: 1px solid var(--border);
       background: var(--card);
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
       gap: 1rem;
     }
-    header h1 {
+    .top-header h1 {
       margin: 0;
-      font-size: 1.5rem;
+      font-size: 1.1rem;
       font-weight: 600;
       letter-spacing: -0.01em;
     }
-    header a.signout {
+    .top-header a.signout {
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       text-decoration: none;
     }
-    header a.signout:hover { color: var(--fg); text-decoration: underline; }
+    .top-header a.signout:hover { color: var(--fg); text-decoration: underline; }
 
-    .nav {
-      padding: 0 2rem;
+    .layout {
+      flex: 1 1 auto;
       display: flex;
-      gap: 0.25rem;
-      border-bottom: 1px solid var(--border);
+      min-height: 0;
+    }
+    .sidebar {
+      flex: 0 0 230px;
       background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 1rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      overflow-y: auto;
+    }
+    .sidebar-section { display: flex; flex-direction: column; gap: 0.2rem; }
+    .sidebar-label {
+      padding: 0 0.1rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.2rem;
     }
     .nav-link {
-      padding: 0.7rem 1rem;
+      display: block;
+      padding: 0.5rem 0.85rem;
       color: var(--muted);
       text-decoration: none;
       font-size: 0.9rem;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
+      border-radius: 6px;
     }
-    .nav-link:hover { color: var(--fg); }
+    .nav-link:hover { color: var(--fg); background: var(--bg); }
     .nav-link.active {
       color: var(--accent);
-      border-bottom-color: var(--accent);
+      background: rgba(34, 102, 221, 0.08);
     }
 
-    .album-header {
-      padding: 1.25rem 2rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card);
+    .album-title-bar {
+      margin-bottom: 1.5rem;
     }
-    .album-header h2 {
+    .album-title-bar h2 {
       margin: 0;
-      font-size: 1.2rem;
+      font-size: 1.4rem;
       font-weight: 600;
+      letter-spacing: -0.01em;
     }
-    .album-header .meta {
-      margin-top: 0.4rem;
+    .album-stats {
       font-size: 0.85rem;
       color: var(--muted);
       font-variant-numeric: tabular-nums;
-      line-height: 1.5;
+      line-height: 1.55;
+      padding: 0 0.1rem;
     }
-    .album-header .meta-line { display: block; }
+    .album-stat-line { display: block; }
     .reset-link {
-      display: inline-block;
-      margin-top: 0.25rem;
+      margin-top: 0.35rem;
       color: #b03030;
       font-size: 0.8rem;
       text-decoration: none;
@@ -92,6 +111,7 @@
       border: none;
       padding: 0;
       font-family: inherit;
+      text-align: left;
     }
     .reset-link:hover { text-decoration: underline; }
 
@@ -160,18 +180,10 @@
     }
     .modal-actions .submit.danger { background: #b03030; }
 
-    .toolbar {
-      padding: 0.75rem 2rem;
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card);
-    }
     .upload-btn {
-      display: inline-flex;
-      align-items: center;
-      padding: 0.45rem 1rem;
+      display: block;
+      width: 100%;
+      padding: 0.5rem 0.85rem;
       background: var(--accent);
       color: white;
       border: none;
@@ -179,6 +191,7 @@
       font-size: 0.9rem;
       font-weight: 500;
       cursor: pointer;
+      font-family: inherit;
     }
     .upload-btn:hover { filter: brightness(1.1); }
     .upload-btn:disabled {
@@ -187,12 +200,15 @@
     }
     .upload-hint {
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.8rem;
+      padding: 0 0.1rem;
     }
     .share-btn {
-      display: inline-flex;
+      display: flex;
       align-items: center;
+      justify-content: center;
       gap: 0.35rem;
+      width: 100%;
       padding: 0.45rem 0.85rem;
       background: var(--card);
       color: var(--fg);
@@ -209,59 +225,72 @@
       cursor: not-allowed;
     }
     .status {
-      margin-left: auto;
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
+      padding: 0 0.1rem;
+      word-break: break-word;
     }
+    .status:empty { display: none; }
 
-    .shares {
-      padding: 0.75rem 2rem 1rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card);
-    }
-    .shares-title {
-      font-size: 0.8rem;
-      color: var(--muted);
-      margin-bottom: 0.4rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
     .shares-list {
       display: flex;
       flex-direction: column;
-      gap: 0.25rem;
+      gap: 0.15rem;
     }
     .share-row {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
-      font-size: 0.85rem;
-      font-variant-numeric: tabular-nums;
+      gap: 0.4rem;
+      padding: 0.15rem 0.1rem;
     }
-    .share-link {
+    .share-slug {
+      flex: 1;
       color: var(--accent);
       text-decoration: none;
-      word-break: break-all;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .share-link:hover { text-decoration: underline; }
+    .share-slug:hover { text-decoration: underline; }
     .share-copy {
       background: none;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.15rem 0.5rem;
-      font-size: 0.75rem;
+      border: none;
+      padding: 0.25rem;
       color: var(--muted);
       cursor: pointer;
-      font-family: inherit;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 0;
     }
-    .share-copy:hover { border-color: var(--accent); color: var(--accent); }
+    .share-copy:hover { color: var(--accent); background: var(--bg); }
+    .share-copy svg { width: 14px; height: 14px; }
     .share-empty {
       font-size: 0.85rem;
       color: var(--muted);
       font-style: italic;
+      padding: 0 0.1rem;
     }
 
-    main { padding: 2rem; min-height: 50vh; }
+    main {
+      flex: 1 1 auto;
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    @media (max-width: 720px) {
+      .layout { flex-direction: column; }
+      .sidebar {
+        flex: 0 0 auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      main { padding: 1.25rem; }
+    }
 
     .grid {
       display: grid;
@@ -350,18 +379,10 @@
   </style>
 </head>
 <body>
-  <header>
+  <header class="top-header">
     <h1>Your Photographs</h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
-  <nav class="nav">
-    <a class="nav-link" href="/">All Photos</a>
-    <a class="nav-link active" href="/albums">Albums</a>
-  </nav>
-  <div class="album-header">
-    <h2 id="album-title">…</h2>
-    <div id="album-meta" class="meta"></div>
-  </div>
 
   <div id="reset-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
     <div class="modal">
@@ -374,24 +395,42 @@
       </div>
     </div>
   </div>
-  <div class="toolbar">
-    <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
-    <span class="upload-hint">or drag photos anywhere on this page</span>
-    <button id="share-btn" class="share-btn" type="button" title="Create a shareable link">
-      <span aria-hidden="true">🔗</span> Share
-    </button>
-    <span id="status" class="status"></span>
-    <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <nav class="sidebar-section">
+        <a class="nav-link" href="/">All Photos</a>
+        <a class="nav-link active" href="/albums">Albums</a>
+      </nav>
+      <div class="sidebar-section">
+        <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
+        <span class="upload-hint">or drag photos anywhere on this page</span>
+        <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+      </div>
+      <div class="sidebar-section">
+        <button id="share-btn" class="share-btn" type="button" title="Create a shareable link">
+          <span aria-hidden="true">🔗</span> Share
+        </button>
+      </div>
+      <div id="shares" class="sidebar-section" hidden>
+        <div class="sidebar-label">Share links</div>
+        <div id="shares-list" class="shares-list"></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Stats</div>
+        <div id="album-meta" class="album-stats"></div>
+      </div>
+      <div id="status" class="status sidebar-section"></div>
+    </aside>
+    <main>
+      <div class="album-title-bar">
+        <h2 id="album-title">…</h2>
+      </div>
+      <div id="loading" class="loading">Loading…</div>
+      <div id="empty" class="empty" hidden>No photos in this album yet.</div>
+      <div id="grid" class="grid" hidden></div>
+    </main>
   </div>
-  <div class="shares" id="shares" hidden>
-    <div class="shares-title">Share links</div>
-    <div id="shares-list" class="shares-list"></div>
-  </div>
-  <main>
-    <div id="loading" class="loading">Loading…</div>
-    <div id="empty" class="empty" hidden>No photos in this album yet.</div>
-    <div id="grid" class="grid" hidden></div>
-  </main>
   <div id="drop-overlay" class="drop-overlay">
     <span>Drop to upload</span>
   </div>
@@ -427,7 +466,7 @@
       ];
       for (const line of lines) {
         const span = document.createElement("span");
-        span.className = "meta-line";
+        span.className = "album-stat-line";
         span.textContent = line;
         metaEl.appendChild(span);
       }
@@ -438,6 +477,8 @@
       reset.addEventListener("click", openResetModal);
       metaEl.appendChild(reset);
     }
+
+    const COPY_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="8" height="9" rx="1"/><path d="M5.5 4.5V3.5C5.5 2.94772 5.94772 2.5 6.5 2.5H12.5C13.0523 2.5 13.5 2.94772 13.5 3.5V10.5C13.5 11.0523 13.0523 11 12.5 11H10.5"/></svg>';
 
     function openResetModal() {
       resetErrorEl.textContent = "";
@@ -619,16 +660,19 @@
         row.className = "share-row";
 
         const a = document.createElement("a");
-        a.className = "share-link";
+        a.className = "share-slug";
         a.href = s.public_url;
         a.target = "_blank";
         a.rel = "noopener";
-        a.textContent = s.public_url;
+        a.textContent = s.share_id;
+        a.title = s.public_url;
 
         const copy = document.createElement("button");
         copy.className = "share-copy";
         copy.type = "button";
-        copy.textContent = "Copy";
+        copy.title = "Copy to clipboard";
+        copy.setAttribute("aria-label", "Copy to clipboard");
+        copy.innerHTML = COPY_ICON_SVG;
         copy.addEventListener("click", () => copyToClipboard(s.public_url, copy));
 
         row.appendChild(a);
@@ -641,9 +685,9 @@
       try {
         await navigator.clipboard.writeText(text);
         if (btn) {
-          const original = btn.textContent;
-          btn.textContent = "Copied";
-          setTimeout(() => { btn.textContent = original; }, 1500);
+          const originalTitle = btn.title;
+          btn.title = "Copied!";
+          setTimeout(() => { btn.title = originalTitle; }, 1500);
         }
       } catch (_e) {
         setStatus("Copy failed — link selected, press ⌘C");
@@ -673,7 +717,7 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         await copyToClipboard(data.public_url);
-        setStatus(`Link copied: ${data.public_url}`);
+        setStatus(`Created ${data.share_id} — link copied`);
         setTimeout(() => setStatus(""), 4000);
         await loadShares();
       } catch (err) {

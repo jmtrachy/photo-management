@@ -19,51 +19,86 @@
       margin: 0;
       background: var(--bg);
       color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
     }
-    header {
-      padding: 1.5rem 2rem 1.25rem;
+    .top-header {
+      flex: 0 0 auto;
+      padding: 0.55rem 1.25rem;
       border-bottom: 1px solid var(--border);
       background: var(--card);
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
       gap: 1rem;
     }
-    header h1 {
+    .top-header h1 {
       margin: 0;
-      font-size: 1.5rem;
+      font-size: 1.1rem;
       font-weight: 600;
       letter-spacing: -0.01em;
     }
-    header h1 a { color: var(--fg); text-decoration: none; }
-    header h1 a:hover { text-decoration: underline; }
-    header a.signout {
+    .top-header h1 a { color: var(--fg); text-decoration: none; }
+    .top-header h1 a:hover { text-decoration: underline; }
+    .top-header a.signout {
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       text-decoration: none;
     }
-    header a.signout:hover { color: var(--fg); text-decoration: underline; }
+    .top-header a.signout:hover { color: var(--fg); text-decoration: underline; }
 
-    .toolbar {
-      padding: 0.75rem 2rem;
-      border-bottom: 1px solid var(--border);
+    .layout {
+      flex: 1 1 auto;
+      display: flex;
+      min-height: 0;
+    }
+    .sidebar {
+      flex: 0 0 220px;
       background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 1rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      overflow-y: auto;
+    }
+    .sidebar-section { display: flex; flex-direction: column; gap: 0.2rem; }
+    .nav-link {
+      display: block;
+      padding: 0.5rem 0.85rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-radius: 6px;
+    }
+    .nav-link:hover { color: var(--fg); background: var(--bg); }
+    .nav-link.active {
+      color: var(--accent);
+      background: rgba(34, 102, 221, 0.08);
     }
     .back-link {
+      display: block;
+      width: 100%;
+      padding: 0.45rem 0.85rem;
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       text-decoration: none;
       background: none;
-      border: none;
-      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
       cursor: pointer;
-      font: inherit;
+      font-family: inherit;
+      text-align: left;
     }
-    .back-link:hover { color: var(--fg); text-decoration: underline; }
+    .back-link:hover { color: var(--fg); border-color: var(--accent); }
 
     main {
-      padding: 2rem;
-      min-height: 50vh;
+      flex: 1 1 auto;
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      min-height: 0;
+      position: relative;
     }
     .stage {
       display: flex;
@@ -90,7 +125,7 @@
     .actions a:hover { text-decoration: underline; }
 
     .nav-btn {
-      position: fixed;
+      position: absolute;
       top: 50%;
       transform: translateY(-50%);
       width: 2.75rem;
@@ -108,6 +143,7 @@
       cursor: pointer;
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
       user-select: none;
+      z-index: 5;
     }
     .nav-btn:hover { background: var(--bg); }
     .nav-btn.prev { left: 1rem; }
@@ -121,29 +157,47 @@
       text-align: center;
     }
     .error { color: #b03030; font-style: normal; }
+
+    @media (max-width: 720px) {
+      .layout { flex-direction: column; }
+      .sidebar {
+        flex: 0 0 auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      main { padding: 1.25rem; }
+    }
   </style>
 </head>
 <body>
-  <header>
+  <header class="top-header">
     <h1><a href="/">Your Photographs</a></h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
-  <div class="toolbar">
-    <button id="back-btn" class="back-link" type="button">← Back</button>
-  </div>
-  <a id="prev-link" class="nav-btn prev" href="#" hidden aria-label="Previous photo">‹</a>
-  <a id="next-link" class="nav-btn next" href="#" hidden aria-label="Next photo">›</a>
-  <main>
-    <div id="loading" class="loading">Loading…</div>
-    <div id="stage" class="stage" hidden>
-      <img id="photo" alt="">
-      <div class="actions">
-        <a id="view-original" target="_blank" rel="noopener">View original</a>
-        ·
-        <a id="download-original">Download original</a>
+  <div class="layout">
+    <aside class="sidebar">
+      <nav class="sidebar-section">
+        <a class="nav-link" href="/">All Photos</a>
+        <a class="nav-link" href="/albums">Albums</a>
+      </nav>
+      <div class="sidebar-section">
+        <button id="back-btn" class="back-link" type="button">← Back</button>
       </div>
-    </div>
-  </main>
+    </aside>
+    <main>
+      <a id="prev-link" class="nav-btn prev" href="#" hidden aria-label="Previous photo">‹</a>
+      <a id="next-link" class="nav-btn next" href="#" hidden aria-label="Next photo">›</a>
+      <div id="loading" class="loading">Loading…</div>
+      <div id="stage" class="stage" hidden>
+        <img id="photo" alt="">
+        <div class="actions">
+          <a id="view-original" target="_blank" rel="noopener">View original</a>
+          ·
+          <a id="download-original">Download original</a>
+        </div>
+      </div>
+    </main>
+  </div>
   <script>
     const photoId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const fromRaw = new URLSearchParams(location.search).get("from") || "/";

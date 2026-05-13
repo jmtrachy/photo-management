@@ -19,62 +19,67 @@
       margin: 0;
       background: var(--bg);
       color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
     }
-    header {
-      padding: 1.5rem 2rem 1.25rem;
+    .top-header {
+      flex: 0 0 auto;
+      padding: 0.55rem 1.25rem;
       border-bottom: 1px solid var(--border);
       background: var(--card);
       display: flex;
-      align-items: baseline;
+      align-items: center;
       justify-content: space-between;
       gap: 1rem;
     }
-    header h1 {
+    .top-header h1 {
       margin: 0;
-      font-size: 1.5rem;
+      font-size: 1.1rem;
       font-weight: 600;
       letter-spacing: -0.01em;
     }
-    header a.signout {
+    .top-header a.signout {
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       text-decoration: none;
     }
-    header a.signout:hover { color: var(--fg); text-decoration: underline; }
+    .top-header a.signout:hover { color: var(--fg); text-decoration: underline; }
 
-    .nav {
-      padding: 0 2rem;
+    .layout {
+      flex: 1 1 auto;
       display: flex;
-      gap: 0.25rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card);
+      min-height: 0;
     }
+    .sidebar {
+      flex: 0 0 220px;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 1rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      overflow-y: auto;
+    }
+    .sidebar-section { display: flex; flex-direction: column; gap: 0.2rem; }
     .nav-link {
-      padding: 0.7rem 1rem;
+      display: block;
+      padding: 0.5rem 0.85rem;
       color: var(--muted);
       text-decoration: none;
       font-size: 0.9rem;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
+      border-radius: 6px;
     }
-    .nav-link:hover { color: var(--fg); }
+    .nav-link:hover { color: var(--fg); background: var(--bg); }
     .nav-link.active {
       color: var(--accent);
-      border-bottom-color: var(--accent);
+      background: rgba(34, 102, 221, 0.08);
     }
 
-    .toolbar {
-      padding: 0.75rem 2rem;
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card);
-    }
     .new-btn {
-      display: inline-flex;
-      align-items: center;
-      padding: 0.45rem 1rem;
+      display: block;
+      width: 100%;
+      padding: 0.5rem 0.85rem;
       background: var(--accent);
       color: white;
       border: none;
@@ -82,15 +87,33 @@
       font-size: 0.9rem;
       font-weight: 500;
       cursor: pointer;
+      font-family: inherit;
     }
     .new-btn:hover { filter: brightness(1.1); }
     .status {
-      margin-left: auto;
       color: var(--muted);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
+      padding: 0 0.1rem;
+      word-break: break-word;
+    }
+    .status:empty { display: none; }
+
+    main {
+      flex: 1 1 auto;
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      min-height: 0;
     }
 
-    main { padding: 2rem; min-height: 50vh; }
+    @media (max-width: 720px) {
+      .layout { flex-direction: column; }
+      .sidebar {
+        flex: 0 0 auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      main { padding: 1.25rem; }
+    }
 
     .grid {
       display: grid;
@@ -223,23 +246,27 @@
   </style>
 </head>
 <body>
-  <header>
+  <header class="top-header">
     <h1>Your Photographs</h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
-  <nav class="nav">
-    <a class="nav-link" href="/">All Photos</a>
-    <a class="nav-link active" href="/albums">Albums</a>
-  </nav>
-  <div class="toolbar">
-    <button id="new-album-btn" class="new-btn" type="button">New album</button>
-    <span id="status" class="status"></span>
+  <div class="layout">
+    <aside class="sidebar">
+      <nav class="sidebar-section">
+        <a class="nav-link" href="/">All Photos</a>
+        <a class="nav-link active" href="/albums">Albums</a>
+      </nav>
+      <div class="sidebar-section">
+        <button id="new-album-btn" class="new-btn" type="button">New album</button>
+      </div>
+      <div id="status" class="status sidebar-section"></div>
+    </aside>
+    <main>
+      <div id="grid" class="grid" hidden></div>
+      <div id="empty" class="empty" hidden>No albums yet.</div>
+      <div id="loading" class="loading">Loading…</div>
+    </main>
   </div>
-  <main>
-    <div id="grid" class="grid" hidden></div>
-    <div id="empty" class="empty" hidden>No albums yet.</div>
-    <div id="loading" class="loading">Loading…</div>
-  </main>
 
   <div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <form id="new-album-form" class="modal">
