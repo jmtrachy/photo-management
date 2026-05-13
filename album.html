@@ -74,11 +74,91 @@
       font-weight: 600;
     }
     .album-header .meta {
-      margin-top: 0.25rem;
+      margin-top: 0.4rem;
       font-size: 0.85rem;
       color: var(--muted);
       font-variant-numeric: tabular-nums;
+      line-height: 1.5;
     }
+    .album-header .meta-line { display: block; }
+    .reset-link {
+      display: inline-block;
+      margin-top: 0.25rem;
+      color: #b03030;
+      font-size: 0.8rem;
+      text-decoration: none;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      font-family: inherit;
+    }
+    .reset-link:hover { text-decoration: underline; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      visibility: hidden;
+    }
+    .modal-backdrop.visible { visibility: visible; }
+    .modal {
+      background: var(--card);
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: min(420px, 90vw);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    }
+    .modal h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .modal .modal-body {
+      margin: 0;
+      color: var(--fg);
+      font-size: 0.95rem;
+    }
+    .modal-error {
+      margin-top: 0.5rem;
+      color: #b03030;
+      font-size: 0.85rem;
+      min-height: 1em;
+    }
+    .modal-actions {
+      margin-top: 1.25rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    .modal-actions button {
+      padding: 0.45rem 1rem;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .modal-actions .cancel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+    .modal-actions .cancel:hover { background: var(--bg); }
+    .modal-actions .submit {
+      background: var(--accent);
+      color: white;
+      border: none;
+    }
+    .modal-actions .submit:hover { filter: brightness(1.1); }
+    .modal-actions .submit:disabled {
+      filter: grayscale(0.5);
+      cursor: not-allowed;
+    }
+    .modal-actions .submit.danger { background: #b03030; }
 
     .toolbar {
       padding: 0.75rem 2rem;
@@ -282,6 +362,18 @@
     <h2 id="album-title">…</h2>
     <div id="album-meta" class="meta"></div>
   </div>
+
+  <div id="reset-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+    <div class="modal">
+      <h2 id="reset-modal-title">Danger — there be dragons</h2>
+      <p class="modal-body">Are you sure you want to reset all counters for this album?</p>
+      <div id="reset-modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="reset-no-btn">No</button>
+        <button type="button" class="submit danger" id="reset-yes-btn">Yes</button>
+      </div>
+    </div>
+  </div>
   <div class="toolbar">
     <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
     <span class="upload-hint">or drag photos anywhere on this page</span>
@@ -321,6 +413,73 @@
     const shareBtn = document.getElementById("share-btn");
     const sharesContainer = document.getElementById("shares");
     const sharesList = document.getElementById("shares-list");
+    const resetBackdrop = document.getElementById("reset-modal-backdrop");
+    const resetYesBtn = document.getElementById("reset-yes-btn");
+    const resetNoBtn = document.getElementById("reset-no-btn");
+    const resetErrorEl = document.getElementById("reset-modal-error");
+
+    function renderMeta(data) {
+      metaEl.innerHTML = "";
+      const lines = [
+        pluralize(data.photos.length, "photo"),
+        pluralize(data.view_count ?? 0, "view"),
+        pluralize(data.download_count ?? 0, "download"),
+      ];
+      for (const line of lines) {
+        const span = document.createElement("span");
+        span.className = "meta-line";
+        span.textContent = line;
+        metaEl.appendChild(span);
+      }
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "reset-link";
+      reset.textContent = "Reset counts";
+      reset.addEventListener("click", openResetModal);
+      metaEl.appendChild(reset);
+    }
+
+    function openResetModal() {
+      resetErrorEl.textContent = "";
+      resetYesBtn.disabled = false;
+      resetNoBtn.disabled = false;
+      resetBackdrop.classList.add("visible");
+      resetNoBtn.focus();
+    }
+    function closeResetModal() {
+      resetBackdrop.classList.remove("visible");
+    }
+    resetNoBtn.addEventListener("click", closeResetModal);
+    resetBackdrop.addEventListener("click", (e) => {
+      if (e.target === resetBackdrop) closeResetModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && resetBackdrop.classList.contains("visible")) closeResetModal();
+    });
+    resetYesBtn.addEventListener("click", async () => {
+      resetYesBtn.disabled = true;
+      resetNoBtn.disabled = true;
+      resetErrorEl.textContent = "";
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/reset-counts`, {
+          method: "POST",
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        closeResetModal();
+        await load();
+      } catch (err) {
+        resetErrorEl.textContent = err.message;
+        resetYesBtn.disabled = false;
+        resetNoBtn.disabled = false;
+      }
+    });
 
     function updateProgress({ done, total }) {
       progressEl.classList.add("active");
@@ -382,7 +541,7 @@
 
         titleEl.textContent = data.title || "Untitled album";
         document.title = data.title ? `${data.title} — Album` : "Album";
-        metaEl.textContent = `${pluralize(data.photos.length, "photo")} · ${pluralize(data.view_count ?? 0, "view")}`;
+        renderMeta(data);
 
         loading.hidden = true;
         grid.innerHTML = "";
