@@ -3,16 +3,25 @@
 Self-hosted photo management at `photos.jamestrachy.com`. See `PROJECT.md` for the
 product goals and `PROJECT_RESPONSE.md` for the design discussion.
 
-## Current scope (Story 2 — empty grid)
+## Current scope
 
-This first deploy stands up the foundation:
-- Magic-link sign-in (email allowlist) at `https://photos.jamestrachy.com/login`
-- Authenticated admin landing page at `/` titled "Your Photographs" with a grid
-  that calls `/api/photos`
-- Session cookie auth on `/`, `/api/photos`, and `/logout`
-- DynamoDB `Photos` table, `LoginTokens` table (with TTL), and S3 photos bucket
-  (all empty, ready for upload work)
-- `/api/photos` returns `{"photos": [], "cursor": null}` until upload lands
+Working features, mapped to user stories in `PROJECT.md`:
+
+- **Story 1** — admin albums grid at `/albums` with cover thumbnails and per-album view counts
+- **Story 2** — recent-photos grid at `/` with date dividers and per-photo view/download counts
+- **Story 3** (partial) — photo detail at `/photo/{id}` with medium image, prev/next arrow navigation across all photos by taken-at, and view/download original links. EXIF panel, album-membership list, and delete cascade not yet built.
+- **Story 4** — drag-and-drop upload via presigned S3 PUT; the derivatives Lambda generates `thumb`/`medium` images, extracts EXIF (taken-at), and writes the Photo record. "Add to album" modal tags the batch into an existing album.
+- **Story 6** — `POST /api/albums/{id}/shares` issues an 8-char slug at `/a/<slug>`; per-album share list shown in the admin album view and copyable.
+- **Story 7** — unauthenticated viewer at `/a/{share_id}` (album grid) and `/a/{share_id}/{photo_id}` (full-bleed photo with translucent prev/next arrows, responsive image size — original for viewport ≥ 1024px, medium below — and a tracked "Download Full Res image" link). Album view increments `Album.view_count`; per-photo view increments `Photo.view_count`; downloads increment `Photo.download_count`.
+
+Not yet built: Story 3's EXIF/album-list/delete pieces, Story 5 (tagging), the cost-estimator widget (PROJECT.md §"Management Console").
+
+Supporting infrastructure:
+- Magic-link sign-in (email allowlist) via SES; session cookies signed with `itsdangerous` (30-day max-age, HttpOnly + Secure + SameSite=Lax)
+- DynamoDB tables: `Photos`, `Albums`, `Memberships`, `Shares`, `LoginTokens` (all `PAY_PER_REQUEST`, `DESTROY` removal policy)
+- S3 photos bucket: `originals/<photo_id>.<ext>` (private, presigned access) and `derivatives/<photo_id>/{thumb,medium}.jpg`
+- Two Lambdas in one stack: the FastAPI/Mangum API and a derivatives processor triggered by S3 `ObjectCreated` on `originals/`
+- Error-logging middleware in `app.py` emits a single JSON CloudWatch record per unhandled exception (event, method, path, exception type/message, full traceback)
 
 ## Prerequisites
 
@@ -96,9 +105,10 @@ npx aws-cdk destroy PhotoManagementStack
 
 The S3 bucket has `RemovalPolicy.RETAIN` to protect uploaded originals — destroy
 will leave it behind. Empty and delete it manually if you really want it gone.
-DynamoDB tables (`Photos`, `LoginTokens`) have `RemovalPolicy.DESTROY` and will
-be deleted with the stack. The SSM cookie-secret parameter is unmanaged by CDK —
-delete with `aws ssm delete-parameter --name /photo-management/cookie-secret`.
+DynamoDB tables (`Photos`, `Albums`, `Memberships`, `Shares`, `LoginTokens`) have
+`RemovalPolicy.DESTROY` and will be deleted with the stack. The SSM cookie-secret
+parameter is unmanaged by CDK — delete with
+`aws ssm delete-parameter --name /photo-management/cookie-secret`.
 
 ## Access
 
@@ -116,17 +126,25 @@ and redeploy.
 ## Project layout
 
 - `app.py` — FastAPI app (Lambda handler via Mangum). Routes:
-  - `GET /` — admin landing page (auth required)
-  - `GET /api/photos` — JSON photo list (auth required)
-  - `GET /login` — sign-in form
-  - `POST /login` — request a magic link
-  - `GET /login/verify?token=...` — consume token, set session cookie
-  - `GET /logout` — clear session cookie
-- `index.html` — admin landing page (vanilla HTML/CSS/JS)
-- `login.html` — sign-in form
-- `login_sent.html` — "check your email" confirmation
-- `photo_management_stack.py` — CDK stack (Lambda, API Gateway, CloudFront,
-  Route53, DynamoDB Photos + LoginTokens tables, S3 photos bucket, SES domain
-  identity with DKIM)
+  - `GET /`, `/albums`, `/album/{id}`, `/photo/{id}` — admin HTML pages (auth required)
+  - `GET /api/photos`, `/api/photos/{id}` — photo list and detail
+  - `POST /api/photos/exists` — derivatives-Lambda completion poll for batch upload
+  - `GET /api/albums`, `/api/albums/{id}` — album list and detail
+  - `POST /api/albums` — create album
+  - `POST /api/albums/{id}/photos` — tag photos into an album
+  - `POST /api/uploads/presign` — issue presigned S3 PUT URLs
+  - `POST /api/albums/{id}/shares`, `GET /api/albums/{id}/shares` — create / list share links
+  - `GET /a/{share_id}` — public album viewer (no auth)
+  - `GET /a/{share_id}/{photo_id}` — public photo viewer (no auth)
+  - `GET /api/public/shares/{share_id}` — JSON for the public album viewer
+  - `GET /api/public/shares/{share_id}/photos/{photo_id}` — JSON for the public photo viewer
+  - `GET /api/public/shares/{share_id}/photos/{photo_id}/download` — increments `download_count`, 302s to a presigned URL with `Content-Disposition: attachment`
+  - `GET /login`, `POST /login`, `GET /login/verify?token=...`, `GET /logout` — auth
+- `derivatives.py` — separate Lambda triggered by S3 `ObjectCreated` on `originals/`. Generates `derivatives/{photo_id}/thumb.jpg` and `medium.jpg`, extracts EXIF, writes the Photo record to DynamoDB.
+- `index.html`, `albums.html`, `album.html`, `photo.html` — admin HTML pages (vanilla HTML/CSS/JS)
+- `public_album.html`, `public_photo.html` — unauthenticated public viewers
+- `login.html`, `login_sent.html` — auth pages
+- `uploads.js` — shared upload helper (drag-drop + presign + post-upload polling) used by the admin pages
+- `photo_management_stack.py` — CDK stack: two Lambdas (API + derivatives), API Gateway, CloudFront, Route53 alias, the five DynamoDB tables, S3 photos bucket, SES domain identity with DKIM
 - `cdk_app.py` — CDK app entry point
-- `Dockerfile` — Lambda container image (Python 3.13)
+- `Dockerfile`, `Dockerfile.derivatives` — Lambda container images (Python 3.13)

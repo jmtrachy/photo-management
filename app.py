@@ -4,6 +4,7 @@ import os
 import secrets
 import string
 import time
+import traceback
 from pathlib import Path
 
 import boto3
@@ -168,12 +169,35 @@ _PHOTO_HTML = _HERE.joinpath("photo.html").read_text()
 _ALBUMS_HTML = _HERE.joinpath("albums.html").read_text()
 _ALBUM_HTML = _HERE.joinpath("album.html").read_text()
 _PUBLIC_ALBUM_HTML = _HERE.joinpath("public_album.html").read_text()
+_PUBLIC_PHOTO_HTML = _HERE.joinpath("public_photo.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
 _LOGIN_SENT_HTML = _HERE.joinpath("login_sent.html").read_text()
 _UPLOADS_JS = _HERE.joinpath("uploads.js").read_text()
 
 
 app = FastAPI()
+
+
+@app.middleware("http")
+async def log_unhandled_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "request_failed",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        )
+        return JSONResponse(
+            {"detail": "Internal Server Error"}, status_code=500
+        )
 
 
 @app.exception_handler(AuthRequired)
@@ -524,6 +548,22 @@ async def public_album_page(share_id: str):
     return _PUBLIC_ALBUM_HTML
 
 
+def _album_photo_ids_in_order(album_id: str) -> list[str]:
+    memberships: list[dict] = []
+    last_key = None
+    while True:
+        kw: dict = {"KeyConditionExpression": Key("pk").eq(f"ALBUM#{album_id}")}
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = memberships_table.query(**kw)
+        memberships.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
+    return [m["sk"].split("#", 1)[1] for m in memberships]
+
+
 @app.get("/api/public/shares/{share_id}")
 async def get_public_album(share_id: str):
     share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
@@ -541,20 +581,7 @@ async def get_public_album(share_id: str):
         ExpressionAttributeValues={":one": 1},
     )
 
-    memberships: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"KeyConditionExpression": Key("pk").eq(f"ALBUM#{album_id}")}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = memberships_table.query(**kw)
-        memberships.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-
-    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
-    photo_ids = [m["sk"].split("#", 1)[1] for m in memberships]
+    photo_ids = _album_photo_ids_in_order(album_id)
 
     photos = []
     for pid in photo_ids:
@@ -573,6 +600,139 @@ async def get_public_album(share_id: str):
         "title": item.get("title", ""),
         "photos": photos,
     }
+
+
+@app.get("/a/{share_id}/{photo_id}", response_class=HTMLResponse)
+async def public_photo_page(share_id: str, photo_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    membership = memberships_table.get_item(
+        Key={"pk": f"ALBUM#{share['album_id']}", "sk": f"PHOTO#{photo_id}"}
+    ).get("Item")
+    if not membership:
+        raise HTTPException(status_code=404, detail="Photo not in album")
+    return _PUBLIC_PHOTO_HTML
+
+
+@app.get("/api/public/shares/{share_id}/photos/{photo_id}")
+async def get_public_photo(share_id: str, photo_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    album_id = share["album_id"]
+
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    photo = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    photo_ids = _album_photo_ids_in_order(album_id)
+    try:
+        idx = photo_ids.index(photo_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Photo not in album")
+    prev_photo_id = photo_ids[idx - 1] if idx > 0 else None
+    next_photo_id = photo_ids[idx + 1] if idx + 1 < len(photo_ids) else None
+
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "public_photo_viewed",
+                "share_id": share_id,
+                "album_id": album_id,
+                "photo_id": photo_id,
+            }
+        )
+    )
+
+    s3_key = photo["s3_key"]
+    ext = s3_key.rsplit(".", 1)[-1].lower()
+    original_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": s3_key,
+            "ResponseContentType": EXT_TO_CONTENT_TYPE.get(ext, "application/octet-stream"),
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+    medium_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": f"derivatives/{photo_id}/medium.jpg",
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+
+    return {
+        "photo_id": photo_id,
+        "album_id": album_id,
+        "album_title": album.get("title", ""),
+        "original_url": original_url,
+        "medium_url": medium_url,
+        "prev_photo_id": prev_photo_id,
+        "next_photo_id": next_photo_id,
+    }
+
+
+@app.get("/api/public/shares/{share_id}/photos/{photo_id}/download")
+async def download_public_photo(share_id: str, photo_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    album_id = share["album_id"]
+
+    membership = memberships_table.get_item(
+        Key={"pk": f"ALBUM#{album_id}", "sk": f"PHOTO#{photo_id}"}
+    ).get("Item")
+    if not membership:
+        raise HTTPException(status_code=404, detail="Photo not in album")
+
+    photo = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    s3_key = photo["s3_key"]
+    ext = s3_key.rsplit(".", 1)[-1].lower()
+
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="ADD download_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+
+    download_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": s3_key,
+            "ResponseContentDisposition": f'attachment; filename="{photo_id}.{ext}"',
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "public_photo_downloaded",
+                "share_id": share_id,
+                "album_id": album_id,
+                "photo_id": photo_id,
+            }
+        )
+    )
+
+    return RedirectResponse(url=download_url, status_code=302)
 
 
 class PresignFile(BaseModel):

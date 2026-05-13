@@ -201,7 +201,7 @@ class PhotoManagementStack(Stack):
         )
 
         login_tokens_table.grant_read_write_data(fn)
-        photos_table.grant_read_data(fn)
+        photos_table.grant_read_write_data(fn)
         albums_table.grant_read_write_data(fn)
         memberships_table.grant_read_write_data(fn)
         shares_table.grant_read_write_data(fn)

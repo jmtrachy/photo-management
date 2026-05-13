@@ -92,3 +92,6 @@ When viewing any album a "share" icon exists which generates a shortened version
 5. The link is shown thereafter on the admin's view of the albums page so it can be grabbed again
 6. The link provides access to non-authenticated users to the album. The album view for unauthenticated users should be similar to the view by admins, except it doesn't have any actions available, doesn't show a menu, doesn't show a Sign Out, and doesn't show the available links.
 
+### 7 - As an unauthenticated user I can click the generated share link and view the gallery
+1. Clicking on a link brings up the full resolution image on the screen, just like on the admin gallery with arrows and all
+

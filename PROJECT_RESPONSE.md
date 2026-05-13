@@ -91,6 +91,12 @@ index, or just accept the latency).
   only served via an authenticated admin path or explicit "download original" action —
   which is where your **download tracking** hooks in.
 
+**Shipped diverges:** both derivatives and originals are currently served via S3 presigned
+URLs (1-hour TTL) generated per request, not CloudFront signed URLs. This means the URL
+changes every page load and the browser can't cache the image across navigations — a known
+caching cost flagged for a follow-up (move `derivatives/*` to a public-read CloudFront
+behavior backed by Origin Access Control, keep `originals/*` presigned + tracked).
+
 ## 4. Public viewer (`photos.jamestrachy.com/a/<share_id>`)
 
 - Static-ish React or plain HTML/JS served from S3 + CloudFront, OR rendered by the
@@ -101,6 +107,12 @@ index, or just accept the latency).
 - **"Photos added after link created" works naturally** because the share resolves to
   an `album_id`, not a frozen list of photos. New photos tagged into that album show
   up on the next page load.
+
+**Shipped:** Lambda-rendered HTML via `public_album.html` (grid) and `public_photo.html`
+(single-photo viewer at `/a/{share_id}/{photo_id}`). Photo viewer is full-bleed with
+translucent prev/next arrows scoped to the album's `taken_at`-desc order, picks
+medium-size on viewports < 1024px and full-res above, and offers a "Download Full Res
+image" text link (not a button) below the image.
 
 ## 5. Shareable link flow
 
@@ -115,6 +127,12 @@ concern:
 The shared URL (pasted into texts, emails, etc.) is
 `https://photos.jamestrachy.com/s/<share_id>`. After the click the recipient's
 URL bar shows `/a/<share_id>`.
+
+**Shipped diverges:** the `/s/` indirection was dropped — only `/a/{share_id}` exists,
+and `POST /api/albums/{id}/shares` returns the `/a/` URL directly. `Share.view_count`
+is reserved in the schema but never incremented; only `Album.view_count` bumps when the
+public viewer loads. Slugs are 8 chars (not 6) over `[a-zA-Z0-9]`. The admin create
+endpoint takes no `name` field yet — the share row is identified by slug + `created_at`.
 
 **Why two endpoints / why the 302.** `Share.view_count` measures
 link-distribution reach; `Album.view_count` measures actual album views. These
@@ -163,6 +181,11 @@ Two places a download can happen:
 
 That same `/d/` endpoint could log structured events (like url-shortener does) so you
 could later build a little dashboard.
+
+**Shipped diverges:** the download route is `GET /api/public/shares/{share_id}/photos/{photo_id}/download`
+(scoped to a share, not a naked photo_id). Same behavior — atomic `ADD download_count :1`,
+then 302 to a presigned URL with `Content-Disposition: attachment`. Logs a single
+`public_photo_downloaded` structured event per call. No admin-side download endpoint exists yet.
 
 ## 7. Admin console
 
@@ -318,7 +341,8 @@ these are explicit non-goals for v1.
   of several. Explicitly out of scope per §7 (YAGNI).
 - **Post-production workflow.** From `PROJECT.md` "Future plans" section —
   explicitly ignored for v1.
-- **Public-viewer user stories.** Not yet written in `PROJECT.md` — to be
-  added separately. The core app depends on them (the share-link recipient is
-  the main external surface), so "future phases" here means future *writing*,
-  not a future *code* phase — these stories need to land before or during v1.
+- **Public-viewer user stories.** Story 7 ("As an unauthenticated user I can
+  click the generated share link and view the gallery") has since been written
+  in `PROJECT.md` and is implemented — full-bleed photo viewer with prev/next,
+  responsive size, tracked download. Additional public-viewer stories (likes,
+  comments, anonymous-visitor identity) remain unspecified and parked.

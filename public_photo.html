@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Photo</title>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --fg: #222;
+      --muted: #888;
+      --border: #e5e5e5;
+      --card: #ffffff;
+      --accent: #2266dd;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .album-header {
+      flex: 0 0 auto;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .album-header h1 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .back-link {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .back-link:hover { color: var(--fg); text-decoration: underline; }
+
+    main {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 0;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+    .stage {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #photo {
+      max-width: 100%;
+      max-height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+    .download-row {
+      flex: 0 0 auto;
+      padding: 0.6rem 1rem 0.8rem;
+      display: flex;
+      justify-content: center;
+    }
+    .download-link {
+      color: var(--accent);
+      font-size: 0.9rem;
+      text-decoration: none;
+    }
+    .download-link:hover { text-decoration: underline; }
+    .download-link[hidden] { display: none; }
+
+    .nav-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 2.75rem;
+      height: 2.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.35);
+      border: none;
+      border-radius: 50%;
+      color: #fff;
+      text-decoration: none;
+      font-size: 1.75rem;
+      line-height: 1;
+      cursor: pointer;
+      user-select: none;
+      z-index: 10;
+      -webkit-tap-highlight-color: transparent;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    .nav-btn:hover { background: rgba(0, 0, 0, 0.55); }
+    .nav-btn.prev { left: 0.75rem; }
+    .nav-btn.next { right: 0.75rem; }
+    .nav-btn[hidden] { display: none; }
+
+    .loading, .error {
+      color: var(--muted);
+      font-style: italic;
+      padding: 4rem 1rem;
+      text-align: center;
+    }
+    .error { color: #b03030; font-style: normal; }
+  </style>
+</head>
+<body>
+  <div class="album-header">
+    <h1 id="album-title">…</h1>
+    <a id="back-link" class="back-link" href="#">← Back to album</a>
+  </div>
+  <main>
+    <a id="prev-link" class="nav-btn prev" href="#" hidden aria-label="Previous photo">‹</a>
+    <a id="next-link" class="nav-btn next" href="#" hidden aria-label="Next photo">›</a>
+    <div id="loading" class="loading">Loading…</div>
+    <div id="stage" class="stage" hidden>
+      <img id="photo" alt="">
+    </div>
+    <div class="download-row">
+      <a id="download-link" class="download-link" href="#" hidden>Download Full Res image</a>
+    </div>
+  </main>
+  <script>
+    const parts = location.pathname.split("/").filter(Boolean);
+    const shareId = decodeURIComponent(parts[1]);
+    const photoId = decodeURIComponent(parts[2]);
+
+    const stage = document.getElementById("stage");
+    const photoEl = document.getElementById("photo");
+    const loading = document.getElementById("loading");
+    const titleEl = document.getElementById("album-title");
+    const backLink = document.getElementById("back-link");
+    const prevLink = document.getElementById("prev-link");
+    const nextLink = document.getElementById("next-link");
+    const downloadLink = document.getElementById("download-link");
+
+    backLink.href = `/a/${encodeURIComponent(shareId)}`;
+    downloadLink.href = `/api/public/shares/${encodeURIComponent(shareId)}/photos/${encodeURIComponent(photoId)}/download`;
+
+    function photoHref(pid) {
+      return `/a/${encodeURIComponent(shareId)}/${encodeURIComponent(pid)}`;
+    }
+
+    async function load() {
+      try {
+        const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}/photos/${encodeURIComponent(photoId)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        const useFullRes = window.innerWidth >= 1024;
+        photoEl.src = useFullRes ? data.original_url : (data.medium_url || data.original_url);
+        const albumTitle = data.album_title || "Album";
+        titleEl.textContent = albumTitle;
+        document.title = albumTitle;
+
+        if (data.prev_photo_id) {
+          prevLink.href = photoHref(data.prev_photo_id);
+          prevLink.hidden = false;
+        }
+        if (data.next_photo_id) {
+          nextLink.href = photoHref(data.next_photo_id);
+          nextLink.hidden = false;
+        }
+
+        loading.hidden = true;
+        stage.hidden = false;
+        downloadLink.hidden = false;
+      } catch (err) {
+        loading.className = "error";
+        loading.textContent = `Failed to load photo: ${err.message}`;
+      }
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft" && !prevLink.hidden) location.href = prevLink.href;
+      else if (e.key === "ArrowRight" && !nextLink.hidden) location.href = nextLink.href;
+    });
+
+    load();
+  </script>
+</body>
+</html>
