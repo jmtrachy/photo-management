@@ -306,19 +306,99 @@
       flex-direction: column;
       color: inherit;
       text-decoration: none;
+      position: relative;
     }
     .photo-card:hover { border-color: var(--accent); }
+    .photo-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
     .photo-card .thumb {
       aspect-ratio: 1;
       width: 100%;
       overflow: hidden;
+      background: #f4f4f4;
+      position: relative;
     }
     .photo-card img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
       display: block;
     }
+    .radio {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.92);
+      border: 2px solid #bbb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.1s;
+      z-index: 2;
+    }
+    .radio svg {
+      width: 0.9rem;
+      height: 0.9rem;
+      color: white;
+      visibility: hidden;
+    }
+    .photo-card:hover .radio,
+    body.selecting .radio {
+      opacity: 1;
+    }
+    .photo-card.selected .radio {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .photo-card.selected .radio svg { visibility: visible; }
+    .cover-badge {
+      position: absolute;
+      top: 0.5rem;
+      left: 0.5rem;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      letter-spacing: 0.02em;
+      z-index: 2;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      pointer-events: none;
+    }
+    .select-count {
+      font-size: 0.9rem;
+      color: var(--fg);
+      padding: 0 0.1rem;
+    }
+    .select-count strong { font-variant-numeric: tabular-nums; }
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 0.3rem 0.1rem;
+      font-family: inherit;
+      text-align: left;
+    }
+    .link-btn:hover { color: var(--fg); }
+    .upload-mode, .select-mode {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .select-mode { display: none; }
+    body.selecting .upload-mode { display: none; }
+    body.selecting .select-mode { display: flex; }
     .photo-meta {
       padding: 0.4rem 0.55rem;
       font-size: 0.72rem;
@@ -403,9 +483,16 @@
         <a class="nav-link active" href="/albums">Albums</a>
       </nav>
       <div class="sidebar-section">
-        <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
-        <span class="upload-hint">or drag photos anywhere on this page</span>
-        <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        <div id="upload-mode-bar" class="upload-mode">
+          <button id="upload-btn" class="upload-btn" type="button">Upload photos</button>
+          <span class="upload-hint">or drag photos anywhere on this page</span>
+          <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+        </div>
+        <div id="select-mode-bar" class="select-mode">
+          <span class="select-count"><strong id="select-count">0</strong> selected</span>
+          <button id="set-cover-btn" class="upload-btn" type="button" disabled>Set as cover</button>
+          <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
+        </div>
       </div>
       <div class="sidebar-section">
         <button id="share-btn" class="share-btn" type="button" title="Create a shareable link">
@@ -495,7 +582,9 @@
       if (e.target === resetBackdrop) closeResetModal();
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && resetBackdrop.classList.contains("visible")) closeResetModal();
+      if (e.key !== "Escape") return;
+      if (resetBackdrop.classList.contains("visible")) closeResetModal();
+      else if (selectionMode) exitSelectionMode();
     });
     resetYesBtn.addEventListener("click", async () => {
       resetYesBtn.disabled = true;
@@ -545,13 +634,104 @@
       return { date: `${y}-${m}-${day}`, time: `${hh}:${mm}` };
     }
 
+    let selectionMode = false;
+    const selectedIds = new Set();
+    let currentCoverPhotoId = null;
+
+    const setCoverBtn = document.getElementById("set-cover-btn");
+    const cancelSelectBtn = document.getElementById("cancel-select-btn");
+    const selectCountEl = document.getElementById("select-count");
+
+    function updateSelectionUI() {
+      for (const card of document.querySelectorAll(".photo-card")) {
+        const pid = card.dataset.photoId;
+        if (selectedIds.has(pid)) card.classList.add("selected");
+        else card.classList.remove("selected");
+      }
+      selectCountEl.textContent = String(selectedIds.size);
+      setCoverBtn.disabled = selectedIds.size !== 1;
+    }
+    function enterSelectionMode() {
+      selectionMode = true;
+      document.body.classList.add("selecting");
+    }
+    function exitSelectionMode() {
+      selectionMode = false;
+      selectedIds.clear();
+      document.body.classList.remove("selecting");
+      updateSelectionUI();
+    }
+    function toggleSelection(photoId) {
+      if (selectedIds.has(photoId)) selectedIds.delete(photoId);
+      else selectedIds.add(photoId);
+      updateSelectionUI();
+    }
+    cancelSelectBtn.addEventListener("click", exitSelectionMode);
+
+    async function setAsCover() {
+      if (selectedIds.size !== 1) return;
+      const photoId = [...selectedIds][0];
+      setCoverBtn.disabled = true;
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/cover`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({photo_id: photoId}),
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        exitSelectionMode();
+        setStatus("Cover updated");
+        setTimeout(() => setStatus(""), 3000);
+        await load();
+      } catch (err) {
+        setStatus(`Set cover failed: ${err.message}`);
+        setCoverBtn.disabled = false;
+      }
+    }
+    setCoverBtn.addEventListener("click", setAsCover);
+
     function buildPhotoCard(photo) {
       const card = document.createElement("a");
       card.className = "photo-card";
       card.href = `/photo/${photo.photo_id}?from=${encodeURIComponent("/album/" + albumId)}`;
+      card.dataset.photoId = photo.photo_id;
+
+      card.addEventListener("click", (e) => {
+        if (selectionMode) {
+          e.preventDefault();
+          toggleSelection(photo.photo_id);
+        }
+      });
 
       const thumb = document.createElement("div");
       thumb.className = "thumb";
+
+      const radio = document.createElement("span");
+      radio.className = "radio";
+      radio.setAttribute("aria-label", "Select photo");
+      radio.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.8 11.5 12.5 5"/></svg>';
+      radio.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!selectionMode) enterSelectionMode();
+        toggleSelection(photo.photo_id);
+      });
+      thumb.appendChild(radio);
+
+      if (photo.photo_id === currentCoverPhotoId) {
+        const badge = document.createElement("span");
+        badge.className = "cover-badge";
+        badge.textContent = "★ Cover";
+        thumb.appendChild(badge);
+      }
+
       const img = document.createElement("img");
       img.src = photo.medium_url;
       img.alt = "";
@@ -582,6 +762,7 @@
 
         titleEl.textContent = data.title || "Untitled album";
         document.title = data.title ? `${data.title} — Album` : "Album";
+        currentCoverPhotoId = data.cover_photo_id || null;
         renderMeta(data);
 
         loading.hidden = true;
@@ -594,6 +775,7 @@
         empty.hidden = true;
         grid.hidden = false;
         for (const p of data.photos) grid.appendChild(buildPhotoCard(p));
+        updateSelectionUI();
       } catch (err) {
         loading.className = "error";
         loading.textContent = `Failed to load album: ${err.message}`;
