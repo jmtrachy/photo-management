@@ -470,6 +470,43 @@ async def add_photos_to_album(
     return {"added": added, "title": album["title"], "album_id": album_id}
 
 
+class SetCoverRequest(BaseModel):
+    photo_id: str
+
+
+@app.put("/api/albums/{album_id}/cover")
+async def set_album_cover(
+    album_id: str,
+    payload: SetCoverRequest,
+    _email: str = Depends(require_admin),
+):
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    membership = memberships_table.get_item(
+        Key={"pk": f"ALBUM#{album_id}", "sk": f"PHOTO#{payload.photo_id}"}
+    ).get("Item")
+    if not membership:
+        raise HTTPException(status_code=400, detail="Photo is not in this album")
+
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="SET cover_photo_id = :cpid",
+        ExpressionAttributeValues={":cpid": payload.photo_id},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "album_cover_set",
+                "album_id": album_id,
+                "cover_photo_id": payload.photo_id,
+            }
+        )
+    )
+    return {"album_id": album_id, "cover_photo_id": payload.photo_id}
+
+
 @app.post("/api/albums/{album_id}/reset-counts")
 async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)):
     album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
