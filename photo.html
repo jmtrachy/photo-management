@@ -112,7 +112,9 @@
       display: block;
       border-radius: 6px;
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+      transition: opacity 0.12s ease-out;
     }
+    #photo.swapping { opacity: 0; }
     .actions {
       font-size: 0.85rem;
       color: var(--muted);
@@ -199,7 +201,7 @@
     </main>
   </div>
   <script>
-    const photoId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
+    const initialPhotoId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const fromRaw = new URLSearchParams(location.search).get("from") || "/";
     const fromPath = (fromRaw.startsWith("/") && !fromRaw.startsWith("//")) ? fromRaw : "/";
     const fromQuery = `?from=${encodeURIComponent(fromPath)}`;
@@ -217,40 +219,113 @@
       location.href = fromPath;
     });
 
-    function prefetchAdjacent(...urls) {
-      for (const url of urls) {
-        if (!url) continue;
-        const link = document.createElement("link");
-        link.rel = "prefetch";
-        link.as = "image";
-        link.href = url;
-        document.head.appendChild(link);
+    let photos = [];
+    let currentIdx = -1;
+    const prefetched = new Set();
+
+    function photoHref(pid) {
+      return `/photo/${encodeURIComponent(pid)}${fromQuery}`;
+    }
+    function prefetchImage(url) {
+      if (!url || prefetched.has(url)) return;
+      prefetched.add(url);
+      const link = document.createElement("link");
+      link.rel = "prefetch";
+      link.as = "image";
+      link.href = url;
+      document.head.appendChild(link);
+    }
+
+    function renderAt(idx, { pushUrl }) {
+      if (idx < 0 || idx >= photos.length) return;
+      currentIdx = idx;
+      const photo = photos[idx];
+
+      photoEl.classList.add("swapping");
+      requestAnimationFrame(() => {
+        photoEl.src = photo.medium_url;
+        if (photoEl.complete) {
+          photoEl.classList.remove("swapping");
+        } else {
+          photoEl.addEventListener(
+            "load",
+            () => photoEl.classList.remove("swapping"),
+            { once: true }
+          );
+        }
+      });
+
+      viewOriginal.href = `/api/photos/${encodeURIComponent(photo.photo_id)}/original`;
+      downloadOriginal.href = `/api/photos/${encodeURIComponent(photo.photo_id)}/download`;
+
+      const prevIdx = idx - 1;
+      const nextIdx = idx + 1;
+      if (prevIdx >= 0) {
+        prevLink.href = photoHref(photos[prevIdx].photo_id);
+        prevLink.hidden = false;
+        prefetchImage(photos[prevIdx].medium_url);
+      } else {
+        prevLink.hidden = true;
+      }
+      if (nextIdx < photos.length) {
+        nextLink.href = photoHref(photos[nextIdx].photo_id);
+        nextLink.hidden = false;
+        prefetchImage(photos[nextIdx].medium_url);
+      } else {
+        nextLink.hidden = true;
+      }
+
+      if (pushUrl) {
+        history.pushState({ photoId: photo.photo_id }, "", photoHref(photo.photo_id));
       }
     }
 
+    function navigate(delta) {
+      const target = currentIdx + delta;
+      if (target < 0 || target >= photos.length) return;
+      renderAt(target, { pushUrl: true });
+    }
+
+    prevLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate(-1);
+    });
+    nextLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate(1);
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") navigate(-1);
+      else if (e.key === "ArrowRight") navigate(1);
+    });
+
+    window.addEventListener("popstate", () => {
+      const segments = location.pathname.split("/").filter(Boolean);
+      const pid = segments[segments.length - 1]
+        ? decodeURIComponent(segments[segments.length - 1])
+        : null;
+      if (!pid) return;
+      const idx = photos.findIndex((p) => p.photo_id === pid);
+      if (idx >= 0) renderAt(idx, { pushUrl: false });
+    });
+
     async function load() {
       try {
-        const resp = await fetch(`/api/photos/${encodeURIComponent(photoId)}`);
+        const resp = await fetch("/api/photos");
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
 
-        photoEl.src = data.medium_url || data.original_url;
-        viewOriginal.href = data.original_url;
-        downloadOriginal.href = data.download_url;
+        photos = data.photos || [];
+        const startIdx = photos.findIndex((p) => p.photo_id === initialPhotoId);
+        if (startIdx < 0) throw new Error("Photo not found");
 
-        if (data.prev_photo_id) {
-          prevLink.href = `/photo/${data.prev_photo_id}${fromQuery}`;
-          prevLink.hidden = false;
-        }
-        if (data.next_photo_id) {
-          nextLink.href = `/photo/${data.next_photo_id}${fromQuery}`;
-          nextLink.hidden = false;
-        }
-
-        prefetchAdjacent(data.prev_medium_url, data.next_medium_url);
+        history.replaceState({ photoId: photos[startIdx].photo_id }, "");
 
         loading.hidden = true;
         stage.hidden = false;
+
+        renderAt(startIdx, { pushUrl: false });
       } catch (err) {
         loading.className = "error";
         loading.textContent = `Failed to load photo: ${err.message}`;

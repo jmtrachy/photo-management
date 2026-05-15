@@ -873,6 +873,34 @@ async def get_public_photo(share_id: str, photo_id: str):
     }
 
 
+@app.post("/api/public/shares/{share_id}/photos/{photo_id}/view")
+async def increment_public_photo_view(share_id: str, photo_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    membership = memberships_table.get_item(
+        Key={"pk": f"ALBUM#{share['album_id']}", "sk": f"PHOTO#{photo_id}"}
+    ).get("Item")
+    if not membership:
+        raise HTTPException(status_code=404, detail="Photo not in album")
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "public_photo_viewed",
+                "share_id": share_id,
+                "album_id": share["album_id"],
+                "photo_id": photo_id,
+            }
+        )
+    )
+    return {"ok": True}
+
+
 @app.get("/api/public/shares/{share_id}/photos/{photo_id}/download")
 async def download_public_photo(share_id: str, photo_id: str):
     share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
@@ -1027,6 +1055,44 @@ async def photos_exists(
 @app.get("/photo/{photo_id}", response_class=HTMLResponse)
 async def photo_detail_page(photo_id: str, _email: str = Depends(require_admin)):
     return _PHOTO_HTML
+
+
+@app.get("/api/photos/{photo_id}/original")
+async def view_photo_original(photo_id: str, _email: str = Depends(require_admin)):
+    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    s3_key = item["s3_key"]
+    ext = s3_key.rsplit(".", 1)[-1].lower()
+    presigned = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": s3_key,
+            "ResponseContentType": EXT_TO_CONTENT_TYPE.get(ext, "application/octet-stream"),
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+    return RedirectResponse(url=presigned, status_code=302)
+
+
+@app.get("/api/photos/{photo_id}/download")
+async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
+    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    s3_key = item["s3_key"]
+    ext = s3_key.rsplit(".", 1)[-1].lower()
+    presigned = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": PHOTOS_BUCKET,
+            "Key": s3_key,
+            "ResponseContentDisposition": f'attachment; filename="{photo_id}.{ext}"',
+        },
+        ExpiresIn=IMAGE_GET_TTL_SECONDS,
+    )
+    return RedirectResponse(url=presigned, status_code=302)
 
 
 @app.get("/api/photos/{photo_id}")
