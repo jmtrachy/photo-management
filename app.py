@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 import os
@@ -245,16 +246,7 @@ async def list_albums(_email: str = Depends(require_admin)):
     albums = []
     for item in resp.get("Items", []):
         cover_photo_id = item.get("cover_photo_id")
-        cover_thumb_url = None
-        if cover_photo_id:
-            cover_thumb_url = s3_client.generate_presigned_url(
-                "get_object",
-                Params={
-                    "Bucket": PHOTOS_BUCKET,
-                    "Key": f"derivatives/{cover_photo_id}/thumb.jpg",
-                },
-                ExpiresIn=IMAGE_GET_TTL_SECONDS,
-            )
+        cover_thumb_url = _derivative_url(cover_photo_id, "thumb") if cover_photo_id else None
         albums.append(
             {
                 "album_id": item["album_id"],
@@ -307,27 +299,11 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
         p = photo_by_id.get(pid)
         if not p:
             continue
-        thumb_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": PHOTOS_BUCKET,
-                "Key": f"derivatives/{pid}/thumb.jpg",
-            },
-            ExpiresIn=IMAGE_GET_TTL_SECONDS,
-        )
-        medium_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": PHOTOS_BUCKET,
-                "Key": f"derivatives/{pid}/medium.jpg",
-            },
-            ExpiresIn=IMAGE_GET_TTL_SECONDS,
-        )
         photos.append(
             {
                 "photo_id": pid,
-                "thumb_url": thumb_url,
-                "medium_url": medium_url,
+                "thumb_url": _derivative_url(pid, "thumb"),
+                "medium_url": _derivative_url(pid, "medium"),
                 "taken_at": int(p.get("taken_at", 0)),
                 "uploaded_at": int(p.get("uploaded_at", 0)),
                 "view_count": int(p.get("view_count", 0)),
@@ -336,16 +312,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
         )
 
     cover_photo_id = item.get("cover_photo_id")
-    cover_thumb_url = None
-    if cover_photo_id:
-        cover_thumb_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": PHOTOS_BUCKET,
-                "Key": f"derivatives/{cover_photo_id}/thumb.jpg",
-            },
-            ExpiresIn=IMAGE_GET_TTL_SECONDS,
-        )
+    cover_thumb_url = _derivative_url(cover_photo_id, "thumb") if cover_photo_id else None
 
     return {
         "album_id": album_id,
@@ -548,6 +515,10 @@ def share_public_url(share_id: str) -> str:
     return f"{BASE_URL}/a/{share_id}"
 
 
+def _derivative_url(photo_id: str, variant: str) -> str:
+    return f"{BASE_URL}/d/{photo_id}/{variant}.jpg"
+
+
 @app.post("/api/albums/{album_id}/shares")
 async def create_album_share(album_id: str, _email: str = Depends(require_admin)):
     album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
@@ -628,12 +599,46 @@ async def list_album_shares(album_id: str, _email: str = Depends(require_admin))
     return {"shares": shares}
 
 
+SITE_NAME = "photos.jamestrachy.com"
+
+
+def _render_public_album_head_meta(
+    share_id: str, album_title: str, cover_photo_id: str | None
+) -> str:
+    title_text = html.escape(album_title or "Untitled album")
+    page_url = html.escape(f"{BASE_URL}/a/{share_id}", quote=True)
+    site_name = html.escape(SITE_NAME, quote=True)
+    image_tags = ""
+    if cover_photo_id:
+        image_url = html.escape(
+            f"{BASE_URL}/d/{cover_photo_id}/medium.jpg", quote=True
+        )
+        image_tags = (
+            f'<meta property="og:image" content="{image_url}">\n  '
+            f'<meta name="twitter:image" content="{image_url}">\n  '
+        )
+    return (
+        f"<title>{title_text}</title>\n  "
+        f'<meta property="og:title" content="{title_text}">\n  '
+        f'<meta property="og:type" content="website">\n  '
+        f'<meta property="og:url" content="{page_url}">\n  '
+        f'<meta property="og:site_name" content="{site_name}">\n  '
+        f"{image_tags}"
+        f'<meta name="twitter:card" content="summary_large_image">\n  '
+        f'<meta name="twitter:title" content="{title_text}">'
+    )
+
+
 @app.get("/a/{share_id}", response_class=HTMLResponse)
 async def public_album_page(share_id: str):
     share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
-    return _PUBLIC_ALBUM_HTML
+    album = albums_table.get_item(Key={"album_id": share["album_id"]}).get("Item")
+    album_title = (album or {}).get("title", "") if album else ""
+    cover_photo_id = (album or {}).get("cover_photo_id")
+    head_meta = _render_public_album_head_meta(share_id, album_title, cover_photo_id)
+    return _PUBLIC_ALBUM_HTML.replace("<!-- HEAD_META -->", head_meta)
 
 
 def _album_photo_ids_in_order(album_id: str) -> list[str]:
@@ -673,15 +678,7 @@ async def get_public_album(share_id: str):
 
     photos = []
     for pid in photo_ids:
-        medium_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": PHOTOS_BUCKET,
-                "Key": f"derivatives/{pid}/medium.jpg",
-            },
-            ExpiresIn=IMAGE_GET_TTL_SECONDS,
-        )
-        photos.append({"photo_id": pid, "medium_url": medium_url})
+        photos.append({"photo_id": pid, "medium_url": _derivative_url(pid, "medium")})
 
     return {
         "album_id": album_id,
@@ -809,14 +806,7 @@ async def download_public_album(share_id: str):
 
 @app.get("/a/{share_id}/{photo_id}", response_class=HTMLResponse)
 async def public_photo_page(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
-    if not share:
-        raise HTTPException(status_code=404, detail="Share not found")
-    membership = memberships_table.get_item(
-        Key={"pk": f"ALBUM#{share['album_id']}", "sk": f"PHOTO#{photo_id}"}
-    ).get("Item")
-    if not membership:
-        raise HTTPException(status_code=404, detail="Photo not in album")
+    del share_id, photo_id
     return _PUBLIC_PHOTO_HTML
 
 
@@ -870,23 +860,16 @@ async def get_public_photo(share_id: str, photo_id: str):
         },
         ExpiresIn=IMAGE_GET_TTL_SECONDS,
     )
-    medium_url = s3_client.generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": PHOTOS_BUCKET,
-            "Key": f"derivatives/{photo_id}/medium.jpg",
-        },
-        ExpiresIn=IMAGE_GET_TTL_SECONDS,
-    )
-
     return {
         "photo_id": photo_id,
         "album_id": album_id,
         "album_title": album.get("title", ""),
         "original_url": original_url,
-        "medium_url": medium_url,
+        "medium_url": _derivative_url(photo_id, "medium"),
         "prev_photo_id": prev_photo_id,
         "next_photo_id": next_photo_id,
+        "prev_medium_url": _derivative_url(prev_photo_id, "medium") if prev_photo_id else None,
+        "next_medium_url": _derivative_url(next_photo_id, "medium") if next_photo_id else None,
     }
 
 
@@ -992,27 +975,11 @@ async def list_photos(_email: str = Depends(require_admin)):
     photos = []
     for item in resp.get("Items", []):
         photo_id = item["photo_id"]
-        thumb_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": PHOTOS_BUCKET,
-                "Key": f"derivatives/{photo_id}/thumb.jpg",
-            },
-            ExpiresIn=IMAGE_GET_TTL_SECONDS,
-        )
-        medium_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": PHOTOS_BUCKET,
-                "Key": f"derivatives/{photo_id}/medium.jpg",
-            },
-            ExpiresIn=IMAGE_GET_TTL_SECONDS,
-        )
         photos.append(
             {
                 "photo_id": photo_id,
-                "thumb_url": thumb_url,
-                "medium_url": medium_url,
+                "thumb_url": _derivative_url(photo_id, "thumb"),
+                "medium_url": _derivative_url(photo_id, "medium"),
                 "taken_at": int(item.get("taken_at", 0)),
                 "uploaded_at": int(item.get("uploaded_at", 0)),
                 "width": int(item.get("width", 0)),
@@ -1093,14 +1060,6 @@ async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
     prev_photo_id = prev_items[0]["photo_id"] if prev_items else None
     next_photo_id = next_items[0]["photo_id"] if next_items else None
 
-    medium_url = s3_client.generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": PHOTOS_BUCKET,
-            "Key": f"derivatives/{photo_id}/medium.jpg",
-        },
-        ExpiresIn=IMAGE_GET_TTL_SECONDS,
-    )
     original_url = s3_client.generate_presigned_url(
         "get_object",
         Params={
@@ -1128,11 +1087,13 @@ async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
         "height": int(item.get("height", 0)),
         "view_count": int(item.get("view_count", 0)),
         "download_count": int(item.get("download_count", 0)),
-        "medium_url": medium_url,
+        "medium_url": _derivative_url(photo_id, "medium"),
         "original_url": original_url,
         "download_url": download_url,
         "prev_photo_id": prev_photo_id,
         "next_photo_id": next_photo_id,
+        "prev_medium_url": _derivative_url(prev_photo_id, "medium") if prev_photo_id else None,
+        "next_medium_url": _derivative_url(next_photo_id, "medium") if next_photo_id else None,
     }
 
 

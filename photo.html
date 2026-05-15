@@ -217,13 +217,24 @@
       location.href = fromPath;
     });
 
+    function prefetchAdjacent(...urls) {
+      for (const url of urls) {
+        if (!url) continue;
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.as = "image";
+        link.href = url;
+        document.head.appendChild(link);
+      }
+    }
+
     async function load() {
       try {
         const resp = await fetch(`/api/photos/${encodeURIComponent(photoId)}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
 
-        photoEl.src = data.original_url;
+        photoEl.src = data.medium_url || data.original_url;
         viewOriginal.href = data.original_url;
         downloadOriginal.href = data.download_url;
 
@@ -235,6 +246,8 @@
           nextLink.href = `/photo/${data.next_photo_id}${fromQuery}`;
           nextLink.hidden = false;
         }
+
+        prefetchAdjacent(data.prev_medium_url, data.next_medium_url);
 
         loading.hidden = true;
         stage.hidden = false;
