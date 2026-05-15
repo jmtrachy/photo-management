@@ -263,6 +263,20 @@ class PhotoManagementStack(Stack):
 
         cf_cert = acm.Certificate.from_certificate_arn(self, "WildcardCert", cert_arn)
 
+        derivatives_rewrite_fn = cloudfront.Function(
+            self,
+            "DerivativesPathRewrite",
+            code=cloudfront.FunctionCode.from_inline(
+                "function handler(event) {\n"
+                "  var req = event.request;\n"
+                "  if (req.uri.indexOf('/d/') === 0) {\n"
+                "    req.uri = '/derivatives/' + req.uri.substring(3);\n"
+                "  }\n"
+                "  return req;\n"
+                "}\n"
+            ),
+        )
+
         distribution = cloudfront.Distribution(
             self,
             "Distribution",
@@ -277,6 +291,21 @@ class PhotoManagementStack(Stack):
                 cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
                 origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             ),
+            additional_behaviors={
+                "/d/*": cloudfront.BehaviorOptions(
+                    origin=origins.S3BucketOrigin.with_origin_access_control(
+                        photos_bucket
+                    ),
+                    cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    function_associations=[
+                        cloudfront.FunctionAssociation(
+                            function=derivatives_rewrite_fn,
+                            event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                        )
+                    ],
+                ),
+            },
         )
 
         route53.ARecord(

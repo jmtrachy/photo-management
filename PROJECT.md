@@ -95,3 +95,12 @@ When viewing any album a "share" icon exists which generates a shortened version
 ### 7 - As an unauthenticated user I can click the generated share link and view the gallery
 1. Clicking on a link brings up the full resolution image on the screen, just like on the admin gallery with arrows and all
 
+### 8 - As an Admin I can choose which photo is the album's cover
+The album's cover photo is the one shown on the albums grid card (Story 1) and on the public viewer's preview chrome. By default it's auto-picked from the first batch of photos added to the album, but I can change it at any time.
+1. From the admin album view, every photo card has a circular checkbox in the upper-right that appears on hover (matching the multi-select pattern on the All Photos screen, Story 4 step 5).
+2. Clicking the checkbox enters selection mode: the sidebar swaps its upload controls for a select-mode bar showing the count of selected photos and a "Set as cover" button.
+3. "Set as cover" is enabled only when exactly one photo is selected. Other future selection-mode actions (e.g. "Remove from album") may allow multiple selections.
+4. Clicking "Set as cover" sets `album.cover_photo_id` to the selected photo, exits selection mode, and updates the visible cover indicator.
+5. A subtle "★ Cover" pill is overlaid on the current cover photo's thumbnail so the admin can always tell which one it is at a glance.
+6. The Cancel link in the select-mode bar (and the Esc key) exits selection mode without applying any action.
+

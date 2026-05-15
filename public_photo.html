@@ -169,14 +169,24 @@
       return `/a/${encodeURIComponent(shareId)}/${encodeURIComponent(pid)}`;
     }
 
+    function prefetchAdjacent(...urls) {
+      for (const url of urls) {
+        if (!url) continue;
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.as = "image";
+        link.href = url;
+        document.head.appendChild(link);
+      }
+    }
+
     async function load() {
       try {
         const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}/photos/${encodeURIComponent(photoId)}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
 
-        const useFullRes = window.innerWidth >= 1024;
-        photoEl.src = useFullRes ? data.original_url : (data.medium_url || data.original_url);
+        photoEl.src = data.medium_url || data.original_url;
         const albumTitle = data.album_title || "Album";
         titleEl.textContent = albumTitle;
         document.title = albumTitle;
@@ -189,6 +199,8 @@
           nextLink.href = photoHref(data.next_photo_id);
           nextLink.hidden = false;
         }
+
+        prefetchAdjacent(data.prev_medium_url, data.next_medium_url);
 
         loading.hidden = true;
         stage.hidden = false;

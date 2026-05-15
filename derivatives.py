@@ -17,7 +17,7 @@ PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 
 THUMB_SIZE = (600, 600)
-MEDIUM_SIZE = (1200, 1200)
+MEDIUM_SIZE = (2000, 2000)
 
 CAMERA_TZ = ZoneInfo("America/Chicago")
 
