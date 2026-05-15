@@ -204,6 +204,17 @@ async def log_unhandled_errors(request: Request, call_next):
         )
 
 
+@app.middleware("http")
+async def no_cache_html_and_js(request: Request, call_next):
+    resp = await call_next(request)
+    content_type = resp.headers.get("content-type", "")
+    if content_type.startswith("text/html") or content_type.startswith(
+        "application/javascript"
+    ):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.exception_handler(AuthRequired)
 async def auth_required_handler(request: Request, _exc: AuthRequired):
     if request.url.path.startswith("/api/"):

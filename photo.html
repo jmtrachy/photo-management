@@ -310,21 +310,32 @@
       if (idx >= 0) renderAt(idx, { pushUrl: false });
     });
 
+    function albumIdFromPath(path) {
+      const m = path.match(/^\/album\/([^/?#]+)\/?$/);
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+
     async function load() {
       try {
-        const resp = await fetch("/api/photos");
+        const sourceAlbumId = albumIdFromPath(fromPath);
+        const listUrl = sourceAlbumId
+          ? `/api/albums/${encodeURIComponent(sourceAlbumId)}`
+          : "/api/photos";
+        const resp = await fetch(listUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
 
         photos = data.photos || [];
+        loading.hidden = true;
+
         const startIdx = photos.findIndex((p) => p.photo_id === initialPhotoId);
-        if (startIdx < 0) throw new Error("Photo not found");
+        if (startIdx < 0) {
+          stage.hidden = true;
+          return;
+        }
 
         history.replaceState({ photoId: photos[startIdx].photo_id }, "");
-
-        loading.hidden = true;
         stage.hidden = false;
-
         renderAt(startIdx, { pushUrl: false });
       } catch (err) {
         loading.className = "error";
