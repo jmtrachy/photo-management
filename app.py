@@ -448,6 +448,78 @@ async def add_photos_to_album(
     return {"added": added, "title": album["title"], "album_id": album_id}
 
 
+class RemovePhotosRequest(BaseModel):
+    photo_ids: list[str]
+
+
+@app.delete("/api/albums/{album_id}/photos")
+async def remove_photos_from_album(
+    album_id: str,
+    payload: RemovePhotosRequest,
+    _email: str = Depends(require_admin),
+):
+    if not payload.photo_ids:
+        raise HTTPException(status_code=400, detail="No photos specified")
+    if len(payload.photo_ids) > ADD_TO_ALBUM_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot remove more than {ADD_TO_ALBUM_MAX} photos at once",
+        )
+
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    removed_set = set(payload.photo_ids)
+    removed = 0
+    with memberships_table.batch_writer() as batch:
+        for pid in removed_set:
+            batch.delete_item(Key={"pk": f"ALBUM#{album_id}", "sk": f"PHOTO#{pid}"})
+            removed += 1
+
+    new_cover_photo_id = album.get("cover_photo_id")
+    if new_cover_photo_id in removed_set:
+        remaining_photo_ids = _album_photo_ids_in_order(album_id)
+        if remaining_photo_ids:
+            new_cover_photo_id = remaining_photo_ids[0]
+            albums_table.update_item(
+                Key={"album_id": album_id},
+                UpdateExpression="SET cover_photo_id = :cpid",
+                ExpressionAttributeValues={":cpid": new_cover_photo_id},
+            )
+        else:
+            new_cover_photo_id = None
+            albums_table.update_item(
+                Key={"album_id": album_id},
+                UpdateExpression="REMOVE cover_photo_id",
+            )
+        logger.info(
+            json.dumps(
+                {
+                    "event": "album_cover_reassigned",
+                    "album_id": album_id,
+                    "cover_photo_id": new_cover_photo_id,
+                }
+            )
+        )
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "photos_removed_from_album",
+                "album_id": album_id,
+                "removed": removed,
+                "requested": len(payload.photo_ids),
+            }
+        )
+    )
+    return {
+        "removed": removed,
+        "album_id": album_id,
+        "cover_photo_id": new_cover_photo_id,
+    }
+
+
 class SetCoverRequest(BaseModel):
     photo_id: str
 

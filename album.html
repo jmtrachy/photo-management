@@ -198,6 +198,24 @@
       filter: grayscale(0.6);
       cursor: not-allowed;
     }
+    .danger-btn {
+      display: block;
+      width: 100%;
+      padding: 0.5rem 0.85rem;
+      background: #b03030;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .danger-btn:hover { filter: brightness(1.1); }
+    .danger-btn:disabled {
+      filter: grayscale(0.6);
+      cursor: not-allowed;
+    }
     .upload-hint {
       color: var(--muted);
       font-size: 0.8rem;
@@ -476,6 +494,18 @@
     </div>
   </div>
 
+  <div id="remove-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="remove-modal-title">
+    <div class="modal">
+      <h2 id="remove-modal-title">Remove from album</h2>
+      <p id="remove-modal-body" class="modal-body">Remove the selected photos from this album? They remain on the site and in any other albums they belong to.</p>
+      <div id="remove-modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="remove-no-btn">Cancel</button>
+        <button type="button" class="submit danger" id="remove-yes-btn">Remove</button>
+      </div>
+    </div>
+  </div>
+
   <div class="layout">
     <aside class="sidebar">
       <nav class="sidebar-section">
@@ -491,6 +521,7 @@
         <div id="select-mode-bar" class="select-mode">
           <span class="select-count"><strong id="select-count">0</strong> selected</span>
           <button id="set-cover-btn" class="upload-btn" type="button" disabled>Set as cover</button>
+          <button id="remove-btn" class="danger-btn" type="button" disabled>Remove</button>
           <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
         </div>
       </div>
@@ -584,6 +615,7 @@
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (resetBackdrop.classList.contains("visible")) closeResetModal();
+      else if (removeBackdrop.classList.contains("visible")) closeRemoveModal();
       else if (selectionMode) exitSelectionMode();
     });
     resetYesBtn.addEventListener("click", async () => {
@@ -639,8 +671,14 @@
     let currentCoverPhotoId = null;
 
     const setCoverBtn = document.getElementById("set-cover-btn");
+    const removeBtn = document.getElementById("remove-btn");
     const cancelSelectBtn = document.getElementById("cancel-select-btn");
     const selectCountEl = document.getElementById("select-count");
+    const removeBackdrop = document.getElementById("remove-modal-backdrop");
+    const removeYesBtn = document.getElementById("remove-yes-btn");
+    const removeNoBtn = document.getElementById("remove-no-btn");
+    const removeErrorEl = document.getElementById("remove-modal-error");
+    const removeBodyEl = document.getElementById("remove-modal-body");
 
     function updateSelectionUI() {
       for (const card of document.querySelectorAll(".photo-card")) {
@@ -650,6 +688,7 @@
       }
       selectCountEl.textContent = String(selectedIds.size);
       setCoverBtn.disabled = selectedIds.size !== 1;
+      removeBtn.disabled = selectedIds.size === 0;
     }
     function enterSelectionMode() {
       selectionMode = true;
@@ -696,6 +735,57 @@
       }
     }
     setCoverBtn.addEventListener("click", setAsCover);
+
+    function openRemoveModal() {
+      if (selectedIds.size === 0) return;
+      const n = selectedIds.size;
+      removeBodyEl.textContent = `Remove ${n} photo${n === 1 ? "" : "s"} from this album? They remain on the site and in any other albums they belong to.`;
+      removeErrorEl.textContent = "";
+      removeYesBtn.disabled = false;
+      removeNoBtn.disabled = false;
+      removeBackdrop.classList.add("visible");
+      removeNoBtn.focus();
+    }
+    function closeRemoveModal() {
+      removeBackdrop.classList.remove("visible");
+    }
+    removeBtn.addEventListener("click", openRemoveModal);
+    removeNoBtn.addEventListener("click", closeRemoveModal);
+    removeBackdrop.addEventListener("click", (e) => {
+      if (e.target === removeBackdrop) closeRemoveModal();
+    });
+    removeYesBtn.addEventListener("click", async () => {
+      const ids = [...selectedIds];
+      if (!ids.length) { closeRemoveModal(); return; }
+      removeYesBtn.disabled = true;
+      removeNoBtn.disabled = true;
+      removeErrorEl.textContent = "";
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/photos`, {
+          method: "DELETE",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({photo_ids: ids}),
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        closeRemoveModal();
+        exitSelectionMode();
+        setStatus(`Removed ${data.removed} photo${data.removed === 1 ? "" : "s"}`);
+        setTimeout(() => setStatus(""), 3000);
+        await load();
+      } catch (err) {
+        removeErrorEl.textContent = err.message;
+        removeYesBtn.disabled = false;
+        removeNoBtn.disabled = false;
+      }
+    });
 
     function buildPhotoCard(photo) {
       const card = document.createElement("a");

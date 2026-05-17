@@ -104,3 +104,56 @@ The album's cover photo is the one shown on the albums grid card (Story 1) and o
 5. A subtle "★ Cover" pill is overlaid on the current cover photo's thumbnail so the admin can always tell which one it is at a glance.
 6. The Cancel link in the select-mode bar (and the Esc key) exits selection mode without applying any action.
 
+### 9 - As an Admin I want to remove photos from an album
+Within the admin Album gallery page when selecting 1..n photos an option for "Remove" should be available. When removed
+the photo is simply not in the album anymore, but remains on the site in general. Subsequent views of the album on
+either the admin or public gallery page will not show this photo. If the photo is the cover photo then select some
+other random photo to be the cover photo.
+
+### 10 - As an Admin I can group albums into a Collection with a public page
+A Collection is a named grouping of albums (e.g. "2026 U14 Girls Soccer Season"). The motivation is sports
+photography: today I send each game's album as a separate link, and recipients lose them over time. A Collection
+gives the team a single durable page that lists every game's album.
+
+An album can belong to 0..n Collections (a girl might be on two teams). A Collection has a title for now —
+no cover photo. Within a Collection, each album is either **listed** (shown on the public page) or **hidden**
+(in the Collection for admin grouping only, e.g. per-girl albums I tag for organization but don't surface to
+the whole team).
+
+#### Public collection page
+1. URL: `https://photos.jamestrachy.com/c/<8-char-slug>`. Slugs are minted the same way as album shares — alphanumeric, generated server-side, stored in the same `Shares` table with an `entity_type` of `"collection"`.
+2. Renders the collection title at the top, then a grid of cards for **listed** albums only.
+3. Each card shows: cover photo (grey placeholder if the album has no cover yet), album title, and creation date in small text underneath.
+4. Cards order most-recently-created-album first.
+5. Clicking a card navigates to that album's public viewer at `/a/<album-share-slug>` (see slug-mint rules below).
+6. `Collection.view_count` increments atomically on each public page load — admin sessions don't count.
+
+#### Slug-mint rules for cards
+When an album is added to a Collection as **listed**, or promoted from hidden→listed:
+- If the album already has any `Shares` row, reuse the **newest** existing one.
+- Otherwise mint a fresh album-share slug and store it.
+- Either way, the chosen `share_id` is persisted on the `CollectionAlbums` membership row so the card link is stable for that collection.
+- Hidden albums don't trigger a mint. Demoting listed→hidden keeps the stored slug (existing album-shares are permanent — see Story 6).
+
+#### Admin: Collections list
+1. New "Collections" nav element alongside Albums and Photos.
+2. Grid of all collections, ordered most-recently-created first, showing each collection's title and the shareable public link.
+3. "New collection" button → modal asking for a title, then redirects to the collection detail page.
+
+#### Admin: Collection detail page
+1. Two sections stacked vertically: **Listed** and **Hidden**. Each is a grid of album cards (cover thumbnail, title, created date) — the same card shape as the public page.
+2. Within each section, cards order most-recently-created-album first.
+3. Each card has the same hover-revealed circular checkbox pattern as Story 4 / Story 8 / Story 9.
+4. Selection mode is scoped to one section at a time. Selecting in the other section clears the prior selection and switches the active section.
+5. The sidebar swaps its add-album controls for a select-mode bar whose actions depend on the active section:
+  * Listed selection → "Hide" (sets membership `visibility="hidden"`) and "Remove" (removes from collection)
+  * Hidden selection → "Make visible" (sets `visibility="listed"` — also runs the slug-mint rule above) and "Remove"
+6. The select-mode bar shows the count of selected albums and a Cancel link. Esc also exits selection mode.
+7. "Add albums" button opens a picker modal with substring search over album titles (same pattern as the Add-to-album modal in Story 4). Multi-select so a season's worth of games can be added in one pass. Newly-added albums default to **listed**.
+
+#### Deletion
+Hard delete: removes the Collection row and every `CollectionAlbums` row. Album-shares that the Collection minted remain alive — share URLs are permanent (Story 6).
+
+Notes:
+* See `PROJECT_RESPONSE.md` for the `CollectionAlbums` adjacency-table layout (PK `COLLECTION#<id>`, SK `ALBUM#<id>`, with `visibility` and `share_id` on the row) and the inverse GSI keyed on `ALBUM#<id>` that powers future "which collections is this album in" lookups.
+* Security model: by-obscurity. Anyone with the `/c/<slug>` link sees every listed album in the collection. Hidden albums are reachable only via their own album-share links.
