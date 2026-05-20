@@ -116,7 +116,7 @@ photography: today I send each game's album as a separate link, and recipients l
 gives the team a single durable page that lists every game's album.
 
 An album can belong to 0..n Collections (a girl might be on two teams). A Collection has a title for now —
-no cover photo. Within a Collection, each album is either **listed** (shown on the public page) or **hidden**
+no cover photo. Within a Collection, each album is either **listed** (shown on the public page) or **unlisted**
 (in the Collection for admin grouping only, e.g. per-girl albums I tag for organization but don't surface to
 the whole team).
 
@@ -129,11 +129,11 @@ the whole team).
 6. `Collection.view_count` increments atomically on each public page load — admin sessions don't count.
 
 #### Slug-mint rules for cards
-When an album is added to a Collection as **listed**, or promoted from hidden→listed:
+When an album is added to a Collection as **listed**, or promoted from unlisted→listed:
 - If the album already has any `Shares` row, reuse the **newest** existing one.
 - Otherwise mint a fresh album-share slug and store it.
 - Either way, the chosen `share_id` is persisted on the `CollectionAlbums` membership row so the card link is stable for that collection.
-- Hidden albums don't trigger a mint. Demoting listed→hidden keeps the stored slug (existing album-shares are permanent — see Story 6).
+- Unlisted albums don't trigger a mint. Demoting listed→unlisted keeps the stored slug (existing album-shares are permanent — see Story 6).
 
 #### Admin: Collections list
 1. New "Collections" nav element alongside Albums and Photos.
@@ -141,13 +141,13 @@ When an album is added to a Collection as **listed**, or promoted from hidden→
 3. "New collection" button → modal asking for a title, then redirects to the collection detail page.
 
 #### Admin: Collection detail page
-1. Two sections stacked vertically: **Listed** and **Hidden**. Each is a grid of album cards (cover thumbnail, title, created date) — the same card shape as the public page.
+1. Two sections stacked vertically: **Listed** and **Unlisted**. Each is a grid of album cards (cover thumbnail, title, created date) — the same card shape as the public page.
 2. Within each section, cards order most-recently-created-album first.
 3. Each card has the same hover-revealed circular checkbox pattern as Story 4 / Story 8 / Story 9.
 4. Selection mode is scoped to one section at a time. Selecting in the other section clears the prior selection and switches the active section.
 5. The sidebar swaps its add-album controls for a select-mode bar whose actions depend on the active section:
-  * Listed selection → "Hide" (sets membership `visibility="hidden"`) and "Remove" (removes from collection)
-  * Hidden selection → "Make visible" (sets `visibility="listed"` — also runs the slug-mint rule above) and "Remove"
+  * Listed selection → "Unlist" (sets membership `visibility="unlisted"`) and "Remove" (removes from collection)
+  * Unlisted selection → "List" (sets `visibility="listed"` — also runs the slug-mint rule above) and "Remove"
 6. The select-mode bar shows the count of selected albums and a Cancel link. Esc also exits selection mode.
 7. "Add albums" button opens a picker modal with substring search over album titles (same pattern as the Add-to-album modal in Story 4). Multi-select so a season's worth of games can be added in one pass. Newly-added albums default to **listed**.
 
@@ -156,4 +156,75 @@ Hard delete: removes the Collection row and every `CollectionAlbums` row. Album-
 
 Notes:
 * See `PROJECT_RESPONSE.md` for the `CollectionAlbums` adjacency-table layout (PK `COLLECTION#<id>`, SK `ALBUM#<id>`, with `visibility` and `share_id` on the row) and the inverse GSI keyed on `ALBUM#<id>` that powers future "which collections is this album in" lookups.
-* Security model: by-obscurity. Anyone with the `/c/<slug>` link sees every listed album in the collection. Hidden albums are reachable only via their own album-share links.
+* Security model: by-obscurity. Anyone with the `/c/<slug>` link sees every listed album in the collection. Unlisted albums are reachable only via their own album-share links.
+
+### 11 - As an Admin I can have photos auto-routed to subject albums on upload
+
+When I upload photos to an album that is **listed** in one or more Collections, the system examines each photo's filename and also adds it to any **unlisted** albums in those Collections whose `subjects` match the filename. This lets me organize per-athlete albums (one per girl on a soccer team) alongside per-game team albums in a single upload, instead of uploading the same photo into multiple albums manually.
+
+The motivating workflow: I shoot ~100 best photos per game (named `<athlete>_NN.jpg`) plus a tail of "good enough for the athlete, not for the team" photos (named `z_<athlete>_NN.jpg`). Today I'd upload everything to the game album, then re-upload each athlete's photos into their own album. With this story, one upload to the game album distributes everything correctly.
+
+#### Subjects on albums
+
+1. Every album has a `subjects` attribute — a list of strings, defaulting to empty — used for filename matching during upload routing.
+2. Subjects are typically set on **unlisted** albums (per-athlete albums that exist purely as routing targets). Listed albums typically have no subjects.
+3. In the album editor, "Subjects" renders as a chip list with help text along the lines of: *"Photos uploaded to other albums in this collection will also be added here if their filename matches any of these."*
+
+#### Filename → subject parse rule
+
+For each uploaded file, derive a match token from its filename:
+1. Strip the extension (everything from the last `.` onward).
+2. If the result starts with `z_`, drop that prefix.
+3. If the result ends with `_<digits>` (one or more), drop that trailing portion. Single strip — not greedy.
+4. Lowercase.
+
+The match token is compared (case-insensitively, equality) against every `subject` on every **unlisted** album in the Collections relevant to this upload (see Routing rules below for how scope is determined).
+
+Examples:
+* `lauren_01.jpg` → `lauren`
+* `lauren.jpg` → `lauren`
+* `z_lauren_01.jpg` → `lauren`
+* `z_lauren.jpg` → `lauren`
+* `lauren_jones_01.jpg` → `lauren_jones`
+* `lauren_alt.jpg` → `lauren_alt` (no trailing digits to strip)
+* `lauren_01_02.jpg` → `lauren_01` (single strip only)
+
+Multi-subject filenames (e.g. `lauren_and_maya_01.jpg`) are out of scope for v1 — they parse to whatever the rule above produces (here, `lauren_and_maya`) and match only if a subject equals that exact string.
+
+#### Routing rules
+
+An album can belong to multiple Collections with potentially different `visibility` in each (Story 10), so the target album's Collection memberships determine routing scope.
+
+When uploading photos to a target album:
+1. Identify every Collection in which the target album is currently **listed**. Call this set the *routing scope*. If the target album isn't listed in any Collection (e.g. a standalone album, or one that's only **unlisted** wherever it appears), the routing scope is empty and no routing happens — photos land only in the target.
+2. For each photo, compute the match token.
+3. Find all **unlisted** albums across the Collections in the routing scope whose lowercased `subjects` contain the token. An unlisted album appearing in multiple in-scope Collections is treated once (matched-set is a union, not a multiset).
+4. **Non-`z_` photos**: add to the target album AND to every matched unlisted album.
+5. **`z_` photos**: add to every matched unlisted album, but NOT to the target album.
+6. **Non-`z_` photo with no match**: lands in the target album only. Expected behavior — team-only shot, no athlete to route to.
+7. **`z_` photo with no match**: not added to any album. The photo still exists on the site (so it can be manually added later) and is surfaced in the Needs Attention section of the results modal.
+
+**No auto-creation of albums.** Subject matching considers only pre-existing unlisted albums; missing athlete albums must be created manually beforehand (e.g., at season start).
+
+#### Post-upload results modal
+
+After the upload and routing complete, a modal renders the breakdown. Two sections:
+
+**Top — Needs Attention** (shown only if non-empty)
+Lists `z_*` photos that matched no subject. Each row: small thumbnail, filename, a short label such as *"matched no subject — added to site, no album."* No fix-it actions in v1 — passive surfacing only.
+
+**Main — Per-photo audit**
+Each row: small thumbnail, filename, then chips for each destination album (album *name*, not id). Examples:
+* Listed-only photo: one chip (e.g. "Game vs Tigers")
+* Listed + matched: two chips (e.g. "Game vs Tigers", "Lauren")
+* `z_` matched: one chip (e.g. "Lauren")
+* `z_` no match: no chips (also appears above in Needs Attention)
+
+Optional filter chips at the top of the section: *all · matched to subject · no match · needs attention*.
+
+#### Implementation notes
+
+* The upload-complete API response includes per-photo routing info, e.g. `{photo_id, filename, added_to: [album_id, ...], warnings: [...]}`. The modal renders this; routing decisions themselves are server-side.
+* Routing happens at the membership-write stage of the upload pipeline — after photo records exist in DynamoDB but before the client sees "done."
+* When an unlisted album has no subjects, it never participates in routing — it's purely a manual-add album.
+* Multi-Collection routing scope is computed via the `CollectionAlbums` inverse GSI keyed on `ALBUM#<id>` (see Story 10 notes): for the target album, fetch every row and filter to those with `visibility="listed"`; the resulting Collection ids define the routing scope. Within each in-scope Collection, candidate unlisted albums are found via the forward query (PK `COLLECTION#<id>`, filter on `visibility="unlisted"`).
