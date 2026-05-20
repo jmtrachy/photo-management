@@ -255,6 +255,15 @@ class PhotoManagementStack(Stack):
             )
         )
 
+        fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["lambda:InvokeFunction"],
+                resources=[
+                    f"arn:aws:lambda:{self.region}:{self.account}:function:*"
+                ],
+            )
+        )
+
         api = apigw.LambdaRestApi(
             self,
             "PhotoManagementApi",
