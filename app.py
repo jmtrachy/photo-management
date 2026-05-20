@@ -56,6 +56,7 @@ EXT_TO_CONTENT_TYPE = {v: k for k, v in CONTENT_TYPE_TO_EXT.items()}
 ssm = boto3.client("ssm")
 ses = boto3.client("ses")
 s3_client = boto3.client("s3")
+lambda_client = boto3.client("lambda")
 dynamodb = boto3.resource("dynamodb")
 tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
 photos_table = dynamodb.Table(PHOTOS_TABLE)
@@ -618,6 +619,7 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
                     "album_id": album_id,
                     "created_at": now,
                     "view_count": 0,
+                    "zip_status": "pending",
                 },
                 ConditionExpression="attribute_not_exists(share_id)",
             )
@@ -634,17 +636,7 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
         )
     )
 
-    included = _build_album_zip(album_id, _share_zip_key(share_id))
-    logger.info(
-        json.dumps(
-            {
-                "event": "share_zip_built",
-                "share_id": share_id,
-                "album_id": album_id,
-                "photo_count": included,
-            }
-        )
-    )
+    _trigger_share_zip_build(share_id, album_id)
 
     return {
         "share_id": share_id,
@@ -791,6 +783,81 @@ def _zip_exists(zip_key: str) -> bool:
         raise
 
 
+def _trigger_share_zip_build(share_id: str, album_id: str) -> None:
+    fn_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    payload = {"task": "build_share_zip", "share_id": share_id, "album_id": album_id}
+    if not fn_name:
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "share_zip_build_local_fallback",
+                    "share_id": share_id,
+                    "album_id": album_id,
+                }
+            )
+        )
+        _build_share_zip_task(payload)
+        return
+    lambda_client.invoke(
+        FunctionName=fn_name,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode("utf-8"),
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "share_zip_build_invoked",
+                "share_id": share_id,
+                "album_id": album_id,
+            }
+        )
+    )
+
+
+def _build_share_zip_task(event: dict) -> dict:
+    share_id = event["share_id"]
+    album_id = event["album_id"]
+    zip_key = _share_zip_key(share_id)
+    try:
+        included = _build_album_zip(album_id, zip_key)
+    except Exception as exc:
+        shares_table.update_item(
+            Key={"share_id": share_id},
+            UpdateExpression="SET zip_status = :s, zip_error = :e",
+            ExpressionAttributeValues={":s": "failed", ":e": str(exc)[:500]},
+        )
+        logger.error(
+            json.dumps(
+                {
+                    "event": "share_zip_failed",
+                    "share_id": share_id,
+                    "album_id": album_id,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        )
+        raise
+
+    shares_table.update_item(
+        Key={"share_id": share_id},
+        UpdateExpression="SET zip_status = :s, photo_count = :c REMOVE zip_error",
+        ExpressionAttributeValues={":s": "ready", ":c": included},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "share_zip_built",
+                "share_id": share_id,
+                "album_id": album_id,
+                "photo_count": included,
+            }
+        )
+    )
+    return {"share_id": share_id, "photo_count": included}
+
+
 def _build_album_zip(album_id: str, zip_key: str) -> int:
     photo_ids = _album_photo_ids_in_order(album_id)
     if not photo_ids:
@@ -838,20 +905,20 @@ async def download_public_album(share_id: str):
         raise HTTPException(status_code=404, detail="Album not found")
 
     zip_key = _share_zip_key(share_id)
-    if not _zip_exists(zip_key):
-        included = _build_album_zip(album_id, zip_key)
-        if included == 0:
-            raise HTTPException(status_code=400, detail="Album is empty")
-        logger.info(
-            json.dumps(
-                {
-                    "event": "share_zip_rebuilt",
-                    "share_id": share_id,
-                    "album_id": album_id,
-                    "photo_count": included,
-                }
-            )
+    zip_status = share.get("zip_status")
+    zip_present = _zip_exists(zip_key)
+
+    if zip_status == "pending":
+        return JSONResponse({"status": "pending"}, status_code=202)
+
+    if zip_status == "failed" or (zip_status != "ready" and not zip_present):
+        shares_table.update_item(
+            Key={"share_id": share_id},
+            UpdateExpression="SET zip_status = :s REMOVE zip_error",
+            ExpressionAttributeValues={":s": "pending"},
         )
+        _trigger_share_zip_build(share_id, album_id)
+        return JSONResponse({"status": "pending"}, status_code=202)
 
     albums_table.update_item(
         Key={"album_id": album_id},
@@ -882,6 +949,7 @@ async def download_public_album(share_id: str):
     )
 
     return {
+        "status": "ready",
         "download_url": download_url,
         "filename": filename,
     }
@@ -1294,4 +1362,10 @@ async def logout():
     return response
 
 
-handler = Mangum(app, lifespan="off")
+_mangum_handler = Mangum(app, lifespan="off")
+
+
+def handler(event, context):
+    if isinstance(event, dict) and event.get("task") == "build_share_zip":
+        return _build_share_zip_task(event)
+    return _mangum_handler(event, context)

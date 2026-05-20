@@ -176,23 +176,37 @@
       }
     }
 
+    const DOWNLOAD_POLL_INTERVAL_MS = 5000;
+    const DOWNLOAD_POLL_MAX_MS = 10 * 60 * 1000;
+
     async function downloadAll() {
       downloadBtn.disabled = true;
       downloadBtn.textContent = "Building zip…";
       downloadError.hidden = true;
       downloadError.textContent = "";
+      const startedAt = Date.now();
       try {
-        const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}/download`);
-        if (!resp.ok) {
-          let detail = `HTTP ${resp.status}`;
-          try {
-            const data = await resp.json();
-            if (data.detail) detail = data.detail;
-          } catch (_e) {}
-          throw new Error(detail);
+        while (true) {
+          const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}/download`);
+          if (resp.status === 202) {
+            if (Date.now() - startedAt > DOWNLOAD_POLL_MAX_MS) {
+              throw new Error("Zip is taking longer than expected. Try again in a few minutes.");
+            }
+            await new Promise(r => setTimeout(r, DOWNLOAD_POLL_INTERVAL_MS));
+            continue;
+          }
+          if (!resp.ok) {
+            let detail = `HTTP ${resp.status}`;
+            try {
+              const data = await resp.json();
+              if (data.detail) detail = data.detail;
+            } catch (_e) {}
+            throw new Error(detail);
+          }
+          const data = await resp.json();
+          window.location.href = data.download_url;
+          break;
         }
-        const data = await resp.json();
-        window.location.href = data.download_url;
       } catch (err) {
         downloadError.textContent = `Download failed: ${err.message}`;
         downloadError.hidden = false;
