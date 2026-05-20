@@ -2,6 +2,7 @@ import html
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import string
@@ -71,6 +72,9 @@ PHOTOS_EXISTS_MAX = 1000
 SHARE_SLUG_LEN = 8
 SHARE_SLUG_ALPHABET = string.ascii_letters + string.digits
 SHARE_SLUG_MAX_ATTEMPTS = 5
+
+PHOTO_ID_RANDOM_HEX_BYTES = 8
+PHOTO_ID_BASENAME_MAX_LEN = 64
 
 _serializer: URLSafeTimedSerializer | None = None
 
@@ -1111,6 +1115,19 @@ class PresignRequest(BaseModel):
     files: list[PresignFile]
 
 
+def _sanitize_photo_basename(filename: str) -> str:
+    name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", stem)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_-")
+    cleaned = cleaned[:PHOTO_ID_BASENAME_MAX_LEN]
+    return cleaned or "photo"
+
+
+def _generate_photo_id(filename: str) -> str:
+    return f"{_sanitize_photo_basename(filename)}--{secrets.token_hex(PHOTO_ID_RANDOM_HEX_BYTES)}"
+
+
 @app.post("/api/uploads/presign")
 async def presign_uploads(
     payload: PresignRequest, _email: str = Depends(require_admin)
@@ -1125,7 +1142,7 @@ async def presign_uploads(
                 status_code=400,
                 detail=f"Unsupported content type: {f.content_type}",
             )
-        photo_id = secrets.token_hex(8)
+        photo_id = _generate_photo_id(f.filename)
         key = f"originals/{photo_id}.{ext}"
         url = s3_client.generate_presigned_url(
             "put_object",
