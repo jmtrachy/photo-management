@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Albums</title>
+  <title>Collections</title>
   <style>
     :root {
       --bg: #fafafa;
@@ -117,49 +117,36 @@
 
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
       gap: 1rem;
     }
-    .album-card {
+    .collection-card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 6px;
-      overflow: hidden;
+      padding: 1rem 1.1rem 1.1rem;
       display: flex;
       flex-direction: column;
+      gap: 0.4rem;
       color: inherit;
       text-decoration: none;
     }
-    .album-card:hover { border-color: var(--accent); }
-    .album-card .cover {
-      aspect-ratio: 1;
-      width: 100%;
-      background: #ececec;
-      overflow: hidden;
-    }
-    .album-card .cover img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
-    .album-meta {
-      padding: 0.55rem 0.7rem 0.65rem;
-    }
-    .album-title {
-      font-size: 0.95rem;
+    .collection-card:hover { border-color: var(--accent); }
+    .collection-title {
+      font-size: 1rem;
       font-weight: 500;
       color: var(--fg);
-      margin: 0 0 0.2rem;
-      white-space: nowrap;
+      margin: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .album-views {
-      font-size: 0.72rem;
+    .collection-meta {
+      font-size: 0.78rem;
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
+
     .empty, .loading {
       color: var(--muted);
       font-style: italic;
@@ -254,26 +241,26 @@
     <aside class="sidebar">
       <nav class="sidebar-section">
         <a class="nav-link" href="/">All Photos</a>
-        <a class="nav-link active" href="/albums">Albums</a>
-        <a class="nav-link" href="/collections">Collections</a>
+        <a class="nav-link" href="/albums">Albums</a>
+        <a class="nav-link active" href="/collections">Collections</a>
       </nav>
       <div class="sidebar-section">
-        <button id="new-album-btn" class="new-btn" type="button">New album</button>
+        <button id="new-collection-btn" class="new-btn" type="button">New collection</button>
       </div>
       <div id="status" class="status sidebar-section"></div>
     </aside>
     <main>
       <div id="grid" class="grid" hidden></div>
-      <div id="empty" class="empty" hidden>No albums yet.</div>
+      <div id="empty" class="empty" hidden>No collections yet.</div>
       <div id="loading" class="loading">Loading…</div>
     </main>
   </div>
 
   <div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <form id="new-album-form" class="modal">
-      <h2 id="modal-title">New album</h2>
-      <label for="album-title">Title</label>
-      <input id="album-title" name="title" type="text" maxlength="200" required autocomplete="off">
+    <form id="new-collection-form" class="modal">
+      <h2 id="modal-title">New collection</h2>
+      <label for="collection-title">Title</label>
+      <input id="collection-title" name="title" type="text" maxlength="200" required autocomplete="off">
       <div id="modal-error" class="modal-error"></div>
       <div class="modal-actions">
         <button type="button" class="cancel" id="cancel-btn">Cancel</button>
@@ -283,10 +270,10 @@
   </div>
 
   <script>
-    const newBtn = document.getElementById("new-album-btn");
+    const newBtn = document.getElementById("new-collection-btn");
     const backdrop = document.getElementById("modal-backdrop");
-    const form = document.getElementById("new-album-form");
-    const titleInput = document.getElementById("album-title");
+    const form = document.getElementById("new-collection-form");
+    const titleInput = document.getElementById("collection-title");
     const errorEl = document.getElementById("modal-error");
     const cancelBtn = document.getElementById("cancel-btn");
     const submitBtn = document.getElementById("submit-btn");
@@ -299,65 +286,50 @@
       return `${n} ${word}${n === 1 ? "" : "s"}`;
     }
 
-    function buildAlbumCard(album) {
+    function buildCollectionCard(collection) {
       const card = document.createElement("a");
-      card.className = "album-card";
-      card.href = `/album/${album.album_id}`;
+      card.className = "collection-card";
+      card.href = `/collection/${collection.collection_id}`;
 
-      const cover = document.createElement("div");
-      cover.className = "cover";
-      if (album.cover_thumb_url) {
-        const img = document.createElement("img");
-        img.src = album.cover_thumb_url;
-        img.alt = "";
-        img.loading = "lazy";
-        cover.appendChild(img);
-      }
-      card.appendChild(cover);
+      const title = document.createElement("h3");
+      title.className = "collection-title";
+      title.textContent = collection.title;
+      title.title = collection.title;
+      card.appendChild(title);
 
       const meta = document.createElement("div");
-      meta.className = "album-meta";
-      const title = document.createElement("div");
-      title.className = "album-title";
-      title.textContent = album.title;
-      title.title = album.title;
-      const stats = document.createElement("div");
-      stats.className = "album-views";
-      const views = pluralize(album.view_count ?? 0, "view");
-      const downloads = pluralize(album.download_count ?? 0, "download");
-      stats.textContent = `${views} · ${downloads}`;
-      meta.appendChild(title);
-      meta.appendChild(stats);
+      meta.className = "collection-meta";
+      meta.textContent = pluralize(collection.album_count ?? 0, "album");
       card.appendChild(meta);
 
       return card;
     }
 
-    function renderAlbums(albums) {
+    function renderCollections(collections) {
       grid.innerHTML = "";
       loading.hidden = true;
-      if (!albums.length) {
+      if (!collections.length) {
         empty.hidden = false;
         grid.hidden = true;
         return;
       }
       empty.hidden = true;
       grid.hidden = false;
-      for (const a of albums) grid.appendChild(buildAlbumCard(a));
+      for (const c of collections) grid.appendChild(buildCollectionCard(c));
     }
 
-    async function fetchAlbums() {
-      const resp = await fetch("/api/albums");
+    async function fetchCollections() {
+      const resp = await fetch("/api/collections");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      return data.albums || [];
+      return data.collections || [];
     }
 
     async function refreshGrid() {
       try {
-        renderAlbums(await fetchAlbums());
+        renderCollections(await fetchCollections());
       } catch (err) {
-        loading.textContent = `Failed to load albums: ${err.message}`;
+        loading.textContent = `Failed to load collections: ${err.message}`;
         loading.hidden = false;
       }
     }
@@ -394,7 +366,7 @@
       submitBtn.disabled = true;
       errorEl.textContent = "";
       try {
-        const resp = await fetch("/api/albums", {
+        const resp = await fetch("/api/collections", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({title}),

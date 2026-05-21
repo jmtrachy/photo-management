@@ -109,6 +109,49 @@ class PhotoManagementStack(Stack):
             time_to_live_attribute="expires_at",
         )
 
+        collections_table = dynamodb.Table(
+            self,
+            "CollectionsTable",
+            partition_key=dynamodb.Attribute(
+                name="collection_id", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        collections_table.add_global_secondary_index(
+            index_name="ByCreatedAt",
+            partition_key=dynamodb.Attribute(
+                name="entity_type", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="created_at", type=dynamodb.AttributeType.NUMBER
+            ),
+        )
+
+        collection_albums_table = dynamodb.Table(
+            self,
+            "CollectionAlbumsTable",
+            partition_key=dynamodb.Attribute(
+                name="pk", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="sk", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        collection_albums_table.add_global_secondary_index(
+            index_name="ByAlbum",
+            partition_key=dynamodb.Attribute(
+                name="sk", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="pk", type=dynamodb.AttributeType.STRING
+            ),
+        )
+
         shares_table = dynamodb.Table(
             self,
             "SharesTable",
@@ -197,6 +240,8 @@ class PhotoManagementStack(Stack):
                 "ALBUMS_TABLE": albums_table.table_name,
                 "MEMBERSHIPS_TABLE": memberships_table.table_name,
                 "SHARES_TABLE": shares_table.table_name,
+                "COLLECTIONS_TABLE": collections_table.table_name,
+                "COLLECTION_ALBUMS_TABLE": collection_albums_table.table_name,
                 "PHOTOS_BUCKET": photos_bucket.bucket_name,
                 "ADMIN_EMAILS": ADMIN_EMAILS,
                 "FROM_EMAIL": FROM_EMAIL,
@@ -209,6 +254,8 @@ class PhotoManagementStack(Stack):
         albums_table.grant_read_write_data(fn)
         memberships_table.grant_read_write_data(fn)
         shares_table.grant_read_write_data(fn)
+        collections_table.grant_read_write_data(fn)
+        collection_albums_table.grant_read_write_data(fn)
         photos_bucket.grant_read_write(fn)
 
         derivatives_fn = _lambda.DockerImageFunction(
@@ -334,5 +381,7 @@ class PhotoManagementStack(Stack):
         CfnOutput(self, "AlbumsTableName", value=albums_table.table_name)
         CfnOutput(self, "MembershipsTableName", value=memberships_table.table_name)
         CfnOutput(self, "SharesTableName", value=shares_table.table_name)
+        CfnOutput(self, "CollectionsTableName", value=collections_table.table_name)
+        CfnOutput(self, "CollectionAlbumsTableName", value=collection_albums_table.table_name)
         CfnOutput(self, "LoginTokensTableName", value=login_tokens_table.table_name)
         CfnOutput(self, "EmailIdentityName", value=email_identity.email_identity_name)

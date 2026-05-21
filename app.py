@@ -30,6 +30,8 @@ PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
 MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
 SHARES_TABLE = os.environ["SHARES_TABLE"]
+COLLECTIONS_TABLE = os.environ["COLLECTIONS_TABLE"]
+COLLECTION_ALBUMS_TABLE = os.environ["COLLECTION_ALBUMS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
@@ -64,10 +66,16 @@ photos_table = dynamodb.Table(PHOTOS_TABLE)
 albums_table = dynamodb.Table(ALBUMS_TABLE)
 memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
 shares_table = dynamodb.Table(SHARES_TABLE)
+collections_table = dynamodb.Table(COLLECTIONS_TABLE)
+collection_albums_table = dynamodb.Table(COLLECTION_ALBUMS_TABLE)
 
 ALBUM_TITLE_MAX_LEN = 200
 ADD_TO_ALBUM_MAX = 100
 PHOTOS_EXISTS_MAX = 1000
+
+COLLECTION_TITLE_MAX_LEN = 200
+COLLECTION_PAGE_LIMIT = 100
+ADD_TO_COLLECTION_MAX = 100
 
 SHARE_SLUG_LEN = 8
 SHARE_SLUG_ALPHABET = string.ascii_letters + string.digits
@@ -177,6 +185,8 @@ _INDEX_HTML = _HERE.joinpath("index.html").read_text()
 _PHOTO_HTML = _HERE.joinpath("photo.html").read_text()
 _ALBUMS_HTML = _HERE.joinpath("albums.html").read_text()
 _ALBUM_HTML = _HERE.joinpath("album.html").read_text()
+_COLLECTIONS_HTML = _HERE.joinpath("collections.html").read_text()
+_COLLECTION_HTML = _HERE.joinpath("collection.html").read_text()
 _PUBLIC_ALBUM_HTML = _HERE.joinpath("public_album.html").read_text()
 _PUBLIC_PHOTO_HTML = _HERE.joinpath("public_photo.html").read_text()
 _LOGIN_HTML = _HERE.joinpath("login.html").read_text()
@@ -240,6 +250,18 @@ async def albums_page(_email: str = Depends(require_admin)):
 @app.get("/album/{album_id}", response_class=HTMLResponse)
 async def album_page(album_id: str, _email: str = Depends(require_admin)):
     return _ALBUM_HTML
+
+
+@app.get("/collections", response_class=HTMLResponse)
+async def collections_page(_email: str = Depends(require_admin)):
+    return _COLLECTIONS_HTML
+
+
+@app.get("/collection/{collection_id}", response_class=HTMLResponse)
+async def collection_page(
+    collection_id: str, _email: str = Depends(require_admin)
+):
+    return _COLLECTION_HTML
 
 
 @app.get("/static/uploads.js")
@@ -593,6 +615,284 @@ async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)
         )
     )
     return {"album_id": album_id, "photos_reset": len(photo_ids)}
+
+
+class CreateCollectionRequest(BaseModel):
+    title: str
+
+
+class AddAlbumsToCollectionRequest(BaseModel):
+    album_ids: list[str]
+
+
+@app.post("/api/collections")
+async def create_collection(
+    payload: CreateCollectionRequest, _email: str = Depends(require_admin)
+):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(title) > COLLECTION_TITLE_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Title exceeds {COLLECTION_TITLE_MAX_LEN} characters",
+        )
+
+    collection_id = secrets.token_hex(8)
+    now = int(time.time())
+    item = {
+        "collection_id": collection_id,
+        "entity_type": "COLLECTION",
+        "title": title,
+        "title_lower": title.lower(),
+        "created_at": now,
+        "view_count": 0,
+    }
+    collections_table.put_item(Item=item)
+    logger.info(
+        json.dumps(
+            {
+                "event": "collection_created",
+                "collection_id": collection_id,
+                "title": title,
+            }
+        )
+    )
+    return {
+        "collection_id": collection_id,
+        "title": title,
+        "created_at": now,
+        "view_count": 0,
+        "album_count": 0,
+    }
+
+
+def _collection_album_ids(collection_id: str) -> list[str]:
+    rows: list[dict] = []
+    last_key = None
+    while True:
+        kw: dict = {
+            "KeyConditionExpression": Key("pk").eq(f"COLLECTION#{collection_id}")
+        }
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = collection_albums_table.query(**kw)
+        rows.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return [r["sk"].split("#", 1)[1] for r in rows]
+
+
+@app.get("/api/collections")
+async def list_collections(_email: str = Depends(require_admin)):
+    resp = collections_table.query(
+        IndexName="ByCreatedAt",
+        KeyConditionExpression=Key("entity_type").eq("COLLECTION"),
+        ScanIndexForward=False,
+        Limit=COLLECTION_PAGE_LIMIT,
+    )
+    items = resp.get("Items", [])
+
+    counts_by_collection: dict[str, int] = {}
+    for it in items:
+        counts_by_collection[it["collection_id"]] = len(
+            _collection_album_ids(it["collection_id"])
+        )
+
+    collections = [
+        {
+            "collection_id": it["collection_id"],
+            "title": it.get("title", ""),
+            "created_at": int(it.get("created_at", 0)),
+            "view_count": int(it.get("view_count", 0)),
+            "album_count": counts_by_collection.get(it["collection_id"], 0),
+        }
+        for it in items
+    ]
+    return {"collections": collections, "cursor": None}
+
+
+@app.get("/api/collections/{collection_id}")
+async def get_collection(
+    collection_id: str, _email: str = Depends(require_admin)
+):
+    item = collections_table.get_item(
+        Key={"collection_id": collection_id}
+    ).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    album_ids = _collection_album_ids(collection_id)
+
+    album_by_id: dict = {}
+    for i in range(0, len(album_ids), 100):
+        chunk = album_ids[i : i + 100]
+        request_items: dict = {
+            ALBUMS_TABLE: {"Keys": [{"album_id": aid} for aid in chunk]}
+        }
+        while request_items:
+            resp = dynamodb.batch_get_item(RequestItems=request_items)
+            for a in resp.get("Responses", {}).get(ALBUMS_TABLE, []):
+                album_by_id[a["album_id"]] = a
+            request_items = resp.get("UnprocessedKeys") or {}
+
+    member_albums = [album_by_id[aid] for aid in album_ids if aid in album_by_id]
+    member_albums.sort(key=lambda a: int(a.get("created_at", 0)), reverse=True)
+
+    albums_out = []
+    for a in member_albums:
+        cover_photo_id = a.get("cover_photo_id")
+        cover_thumb_url = (
+            _derivative_url(cover_photo_id, "thumb") if cover_photo_id else None
+        )
+        albums_out.append(
+            {
+                "album_id": a["album_id"],
+                "title": a.get("title", ""),
+                "created_at": int(a.get("created_at", 0)),
+                "cover_photo_id": cover_photo_id,
+                "cover_thumb_url": cover_thumb_url,
+            }
+        )
+
+    return {
+        "collection_id": collection_id,
+        "title": item.get("title", ""),
+        "created_at": int(item.get("created_at", 0)),
+        "view_count": int(item.get("view_count", 0)),
+        "albums": albums_out,
+    }
+
+
+@app.delete("/api/collections/{collection_id}")
+async def delete_collection(
+    collection_id: str, _email: str = Depends(require_admin)
+):
+    item = collections_table.get_item(
+        Key={"collection_id": collection_id}
+    ).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    album_ids = _collection_album_ids(collection_id)
+    with collection_albums_table.batch_writer() as batch:
+        for aid in album_ids:
+            batch.delete_item(
+                Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{aid}"}
+            )
+
+    collections_table.delete_item(Key={"collection_id": collection_id})
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "collection_deleted",
+                "collection_id": collection_id,
+                "removed_memberships": len(album_ids),
+            }
+        )
+    )
+    return {"collection_id": collection_id, "removed_memberships": len(album_ids)}
+
+
+@app.post("/api/collections/{collection_id}/albums")
+async def add_albums_to_collection(
+    collection_id: str,
+    payload: AddAlbumsToCollectionRequest,
+    _email: str = Depends(require_admin),
+):
+    collection = collections_table.get_item(
+        Key={"collection_id": collection_id}
+    ).get("Item")
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    if not payload.album_ids:
+        raise HTTPException(status_code=400, detail="No album_ids supplied")
+    if len(payload.album_ids) > ADD_TO_COLLECTION_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot add more than {ADD_TO_COLLECTION_MAX} albums at once",
+        )
+
+    seen: set[str] = set()
+    unique_ids: list[str] = []
+    for aid in payload.album_ids:
+        if aid in seen:
+            continue
+        seen.add(aid)
+        unique_ids.append(aid)
+
+    keys = [{"album_id": aid} for aid in unique_ids]
+    found_albums: dict = {}
+    for i in range(0, len(keys), 100):
+        chunk_keys = keys[i : i + 100]
+        request_items: dict = {ALBUMS_TABLE: {"Keys": chunk_keys}}
+        while request_items:
+            resp = dynamodb.batch_get_item(RequestItems=request_items)
+            for a in resp.get("Responses", {}).get(ALBUMS_TABLE, []):
+                found_albums[a["album_id"]] = a
+            request_items = resp.get("UnprocessedKeys") or {}
+
+    missing = [aid for aid in unique_ids if aid not in found_albums]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Album(s) not found: {', '.join(missing)}",
+        )
+
+    now = int(time.time())
+    added = 0
+    with collection_albums_table.batch_writer() as batch:
+        for aid in unique_ids:
+            batch.put_item(
+                Item={
+                    "pk": f"COLLECTION#{collection_id}",
+                    "sk": f"ALBUM#{aid}",
+                    "created_at": now,
+                    "visibility": "listed",
+                }
+            )
+            added += 1
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "albums_added_to_collection",
+                "collection_id": collection_id,
+                "added": added,
+            }
+        )
+    )
+    return {"collection_id": collection_id, "added": added}
+
+
+@app.delete("/api/collections/{collection_id}/albums/{album_id}")
+async def remove_album_from_collection(
+    collection_id: str,
+    album_id: str,
+    _email: str = Depends(require_admin),
+):
+    collection = collections_table.get_item(
+        Key={"collection_id": collection_id}
+    ).get("Item")
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    collection_albums_table.delete_item(
+        Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"}
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "album_removed_from_collection",
+                "collection_id": collection_id,
+                "album_id": album_id,
+            }
+        )
+    )
+    return {"collection_id": collection_id, "album_id": album_id}
 
 
 def generate_share_slug() -> str:
