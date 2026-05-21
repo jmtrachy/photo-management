@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- HEAD_META -->
+  <style>
+    :root {
+      --bg: #fafafa;
+      --fg: #222;
+      --muted: #888;
+      --border: #e5e5e5;
+      --card: #ffffff;
+      --accent: #2266dd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .collection-header {
+      padding: 1.5rem 2rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    .collection-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    main { padding: 2rem; min-height: 50vh; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1.25rem;
+    }
+    .album-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      color: inherit;
+      text-decoration: none;
+    }
+    .album-card:hover { border-color: var(--accent); }
+    .album-card .cover {
+      aspect-ratio: 1;
+      width: 100%;
+      background: #ececec;
+      overflow: hidden;
+    }
+    .album-card .cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .album-meta {
+      padding: 0.7rem 0.85rem 0.85rem;
+    }
+    .album-title {
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--fg);
+      margin: 0 0 0.25rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .album-date {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .empty, .loading, .error {
+      color: var(--muted);
+      font-style: italic;
+      padding: 4rem 1rem;
+      text-align: center;
+    }
+    .error { color: #b03030; font-style: normal; }
+  </style>
+</head>
+<body>
+  <div class="collection-header">
+    <h1 id="collection-title">…</h1>
+  </div>
+  <main>
+    <div id="loading" class="loading">Loading…</div>
+    <div id="empty" class="empty" hidden>No albums in this collection yet.</div>
+    <div id="grid" class="grid" hidden></div>
+  </main>
+  <script>
+    const shareId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
+    const titleEl = document.getElementById("collection-title");
+    const grid = document.getElementById("grid");
+    const empty = document.getElementById("empty");
+    const loading = document.getElementById("loading");
+
+    function buildAlbumCard(album) {
+      const card = document.createElement("a");
+      card.className = "album-card";
+      card.href = album.share_url || "#";
+
+      const cover = document.createElement("div");
+      cover.className = "cover";
+      if (album.cover_thumb_url) {
+        const img = document.createElement("img");
+        img.src = album.cover_thumb_url;
+        img.alt = "";
+        img.loading = "lazy";
+        cover.appendChild(img);
+      }
+      card.appendChild(cover);
+
+      const meta = document.createElement("div");
+      meta.className = "album-meta";
+      const title = document.createElement("div");
+      title.className = "album-title";
+      title.textContent = album.title || "(untitled)";
+      title.title = album.title;
+      meta.appendChild(title);
+      if (album.created_at) {
+        const date = document.createElement("div");
+        date.className = "album-date";
+        date.textContent = new Date(album.created_at * 1000).toISOString().slice(0, 10);
+        meta.appendChild(date);
+      }
+      card.appendChild(meta);
+
+      return card;
+    }
+
+    async function load() {
+      try {
+        const resp = await fetch(`/api/public/collections/${encodeURIComponent(shareId)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        titleEl.textContent = data.title || "Untitled collection";
+        const albums = data.albums || [];
+        loading.hidden = true;
+        if (!albums.length) {
+          empty.hidden = false;
+          return;
+        }
+        grid.hidden = false;
+        for (const a of albums) grid.appendChild(buildAlbumCard(a));
+      } catch (err) {
+        loading.textContent = `Failed to load collection: ${err.message}`;
+        loading.classList.add("error");
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>
