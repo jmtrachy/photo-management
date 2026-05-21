@@ -228,3 +228,30 @@ Optional filter chips at the top of the section: *all · matched to subject · n
 * Routing happens at the membership-write stage of the upload pipeline — after photo records exist in DynamoDB but before the client sees "done."
 * When an unlisted album has no subjects, it never participates in routing — it's purely a manual-add album.
 * Multi-Collection routing scope is computed via the `CollectionAlbums` inverse GSI keyed on `ALBUM#<id>` (see Story 10 notes): for the target album, fetch every row and filter to those with `visibility="listed"`; the resulting Collection ids define the routing scope. Within each in-scope Collection, candidate unlisted albums are found via the forward query (PK `COLLECTION#<id>`, filter on `visibility="unlisted"`).
+
+### 12 - As an Admin I can reorder albums within a Collection
+
+The default sort (most-recently-created-album first) doesn't always match what I want to surface — for a season of games I might want chronological game order, or to pin a championship final at the top. From the admin Collection detail page (Story 10) I can drag-and-drop album cards to set a manual order, and the new order persists for both the admin view and the public collection page (Story 10).
+
+#### Position field
+
+1. Each `CollectionAlbums` row gains a `position` integer attribute, set on insertion to a monotonically increasing value (e.g., `max(existing positions) + 100`, or current Unix time — anything that sorts last by default).
+2. The `GET /api/collections/{id}` response sorts member albums by `position` ascending, with `created_at` desc as a tiebreak for legacy rows missing a `position`.
+3. Position is per-`CollectionAlbums` row (not per-album) — the same album in two Collections can have different positions in each.
+
+#### Drag-and-drop UX
+
+1. On the admin Collection detail page, album cards in each section (Listed and Unlisted) are draggable via the HTML5 drag-and-drop API. Cursor changes on grab; a drop-indicator marks the insertion point as the user drags; the dropped card animates into place.
+2. Drag is scoped to within a section — dragging from Listed into Unlisted does NOT change visibility. Cross-section moves use the existing selection-mode `Unlist` / `List` actions (Story 10).
+3. Optimistic UI: the new order renders immediately on drop; the client sends the new order to the backend; failure rolls back to the previous order with a status message.
+4. Mobile fallback: tap a card to enter a simple "move" mode (up/down arrow buttons) since native HTML5 drag is unreliable on touch devices.
+
+#### Reorder API
+
+1. `PUT /api/collections/{collection_id}/albums/order` accepts `{ album_ids: [...] }` — an ordered list whose `position` values should be rewritten in that order.
+2. Server validates the payload is a permutation of either the Listed or Unlisted set in the Collection (every id exists in the Collection at the implied visibility; the set must match exactly).
+3. Positions are rewritten contiguously (e.g., 100, 200, 300, …) using `batch_writer`. Concurrent reorders accept last-write-wins.
+
+#### Public collection page
+
+Story 10's public `/c/<slug>` view renders Listed albums in `position` order instead of `created_at` order. No public-side UI for reordering — admin-only feature.

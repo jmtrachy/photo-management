@@ -53,7 +53,7 @@
       min-height: 0;
     }
     .sidebar {
-      flex: 0 0 220px;
+      flex: 0 0 230px;
       background: var(--card);
       border-right: 1px solid var(--border);
       padding: 1rem 0.75rem;
@@ -91,6 +91,55 @@
       font-family: inherit;
     }
     .new-btn:hover { filter: brightness(1.1); }
+    .new-btn.secondary {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+    .new-btn.secondary:hover { background: var(--bg); filter: none; }
+    .new-btn.danger {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--danger);
+    }
+    .new-btn.danger:hover { background: var(--bg); filter: none; }
+    .new-btn:disabled {
+      filter: grayscale(0.5);
+      cursor: not-allowed;
+    }
+
+    .select-count {
+      font-size: 0.9rem;
+      color: var(--fg);
+      padding: 0 0.1rem;
+    }
+    .select-count strong { font-variant-numeric: tabular-nums; }
+    .select-section-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      padding: 0 0.1rem;
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 0.3rem 0.1rem;
+      font-family: inherit;
+      text-align: left;
+    }
+    .link-btn:hover { color: var(--fg); }
+    .add-mode, .select-mode {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .select-mode { display: none; }
+    body.selecting .add-mode { display: none; }
+    body.selecting .select-mode { display: flex; }
     .status {
       color: var(--muted);
       font-size: 0.85rem;
@@ -117,22 +166,68 @@
     }
 
     .page-header {
-      margin: 0 0 1.25rem;
+      margin: 0 0 0.75rem;
       display: flex;
       align-items: baseline;
-      gap: 0.75rem;
+      gap: 0.6rem;
+      flex-wrap: wrap;
     }
     .page-header h2 {
       margin: 0;
       font-size: 1.25rem;
       font-weight: 600;
     }
-    .page-header .breadcrumb {
+    .breadcrumb {
       color: var(--muted);
       font-size: 0.9rem;
       text-decoration: none;
     }
-    .page-header .breadcrumb:hover { color: var(--fg); text-decoration: underline; }
+    .breadcrumb:hover { color: var(--fg); text-decoration: underline; }
+
+    .public-url {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .public-url a {
+      color: var(--accent);
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .public-url a:hover { text-decoration: underline; }
+    .public-url button {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.78rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-family: inherit;
+    }
+    .public-url button:hover { color: var(--fg); }
+
+    .section { margin-bottom: 2rem; }
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+    .section-title {
+      font-size: 1rem;
+      font-weight: 500;
+      margin: 0;
+    }
+    .section-count {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
 
     .grid {
       display: grid;
@@ -180,34 +275,46 @@
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
-    .remove-btn {
+    .radio {
       position: absolute;
-      top: 0.4rem;
-      right: 0.4rem;
-      width: 1.6rem;
-      height: 1.6rem;
-      border: none;
+      top: 0.5rem;
+      right: 0.5rem;
+      width: 1.5rem;
+      height: 1.5rem;
       border-radius: 50%;
-      background: rgba(0, 0, 0, 0.55);
-      color: white;
-      font-size: 0.85rem;
-      line-height: 1;
+      background: rgba(255, 255, 255, 0.92);
+      border: 2px solid #bbb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
       opacity: 0;
-      transition: opacity 0.15s;
-      font-family: inherit;
+      transition: opacity 0.1s;
+      z-index: 2;
     }
-    .album-card:hover .remove-btn,
-    .remove-btn:focus { opacity: 1; }
-    .remove-btn:hover { background: var(--danger); }
+    .radio svg {
+      width: 0.9rem;
+      height: 0.9rem;
+      color: white;
+      visibility: hidden;
+    }
+    .album-card:hover .radio,
+    body.selecting .radio { opacity: 1; }
+    .album-card.selected .radio {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .album-card.selected .radio svg { visibility: visible; }
 
     .empty, .loading {
       color: var(--muted);
       font-style: italic;
-      padding: 4rem 1rem;
+      padding: 2rem 1rem;
       text-align: center;
     }
+    .empty.section-empty { padding: 1.5rem 1rem; font-size: 0.9rem; }
 
+    /* Add-albums modal */
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -361,7 +468,16 @@
         <a class="nav-link active" href="/collections">Collections</a>
       </nav>
       <div class="sidebar-section">
-        <button id="add-albums-btn" class="new-btn" type="button">Add albums</button>
+        <div class="add-mode">
+          <button id="add-albums-btn" class="new-btn" type="button">Add albums</button>
+        </div>
+        <div class="select-mode" id="select-mode-bar">
+          <span class="select-count"><strong id="select-count">0</strong> selected</span>
+          <span class="select-section-label" id="select-section-label">in Listed</span>
+          <button id="action-primary-btn" class="new-btn" type="button">Unlist</button>
+          <button id="action-remove-btn" class="new-btn danger" type="button">Remove</button>
+          <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
+        </div>
       </div>
       <div id="status" class="status sidebar-section"></div>
     </aside>
@@ -371,9 +487,31 @@
         <span class="breadcrumb">›</span>
         <h2 id="collection-title">…</h2>
       </div>
-      <div id="grid" class="grid" hidden></div>
-      <div id="empty" class="empty" hidden>No albums in this collection yet.</div>
+      <div id="public-url" class="public-url" hidden>
+        <span>Public link:</span>
+        <a id="public-url-link" href="#" target="_blank" rel="noopener"></a>
+        <button type="button" id="copy-url-btn">Copy</button>
+      </div>
       <div id="loading" class="loading">Loading…</div>
+      <div id="empty" class="empty" hidden>No albums in this collection yet.</div>
+      <div id="sections" hidden>
+        <section class="section">
+          <div class="section-header">
+            <h3 class="section-title">Listed</h3>
+            <span class="section-count" id="listed-count"></span>
+          </div>
+          <div id="listed-grid" class="grid"></div>
+          <div id="listed-empty" class="empty section-empty" hidden>No listed albums.</div>
+        </section>
+        <section class="section">
+          <div class="section-header">
+            <h3 class="section-title">Unlisted</h3>
+            <span class="section-count" id="unlisted-count"></span>
+          </div>
+          <div id="unlisted-grid" class="grid"></div>
+          <div id="unlisted-empty" class="empty section-empty" hidden>No unlisted albums.</div>
+        </section>
+      </div>
     </main>
   </div>
 
@@ -396,11 +534,26 @@
   <script>
     const collectionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const titleEl = document.getElementById("collection-title");
-    const grid = document.getElementById("grid");
+    const publicUrlEl = document.getElementById("public-url");
+    const publicUrlLink = document.getElementById("public-url-link");
+    const copyUrlBtn = document.getElementById("copy-url-btn");
+    const sectionsEl = document.getElementById("sections");
+    const listedGrid = document.getElementById("listed-grid");
+    const unlistedGrid = document.getElementById("unlisted-grid");
+    const listedEmpty = document.getElementById("listed-empty");
+    const unlistedEmpty = document.getElementById("unlisted-empty");
+    const listedCount = document.getElementById("listed-count");
+    const unlistedCount = document.getElementById("unlisted-count");
     const empty = document.getElementById("empty");
     const loading = document.getElementById("loading");
     const statusEl = document.getElementById("status");
     const addBtn = document.getElementById("add-albums-btn");
+
+    const selectCountEl = document.getElementById("select-count");
+    const selectSectionLabel = document.getElementById("select-section-label");
+    const actionPrimaryBtn = document.getElementById("action-primary-btn");
+    const actionRemoveBtn = document.getElementById("action-remove-btn");
+    const cancelSelectBtn = document.getElementById("cancel-select-btn");
 
     const backdrop = document.getElementById("modal-backdrop");
     const modalFilter = document.getElementById("modal-filter");
@@ -416,11 +569,61 @@
     let pickerAlbums = [];
     let pickerSelected = new Set();
 
+    let activeSection = null;
+    const selected = new Set();
+
     function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 
-    function buildAlbumCard(album) {
+    function exitSelectMode() {
+      activeSection = null;
+      selected.clear();
+      document.body.classList.remove("selecting");
+      for (const card of document.querySelectorAll(".album-card.selected")) {
+        card.classList.remove("selected");
+      }
+    }
+
+    function updateSelectBar() {
+      selectCountEl.textContent = selected.size;
+      selectSectionLabel.textContent =
+        activeSection === "listed" ? "in Listed" : "in Unlisted";
+      actionPrimaryBtn.textContent =
+        activeSection === "listed" ? "Unlist" : "List";
+      actionPrimaryBtn.disabled = selected.size === 0;
+      actionRemoveBtn.disabled = selected.size === 0;
+    }
+
+    function toggleSelection(albumId, section) {
+      if (activeSection && activeSection !== section) {
+        for (const card of document.querySelectorAll(".album-card.selected")) {
+          card.classList.remove("selected");
+        }
+        selected.clear();
+      }
+      activeSection = section;
+      const card = document.querySelector(
+        `.album-card[data-album-id="${albumId}"][data-section="${section}"]`
+      );
+      if (selected.has(albumId)) {
+        selected.delete(albumId);
+        if (card) card.classList.remove("selected");
+      } else {
+        selected.add(albumId);
+        if (card) card.classList.add("selected");
+      }
+      if (selected.size === 0) {
+        exitSelectMode();
+      } else {
+        document.body.classList.add("selecting");
+        updateSelectBar();
+      }
+    }
+
+    function buildAlbumCard(album, section) {
       const card = document.createElement("div");
       card.className = "album-card";
+      card.dataset.albumId = album.album_id;
+      card.dataset.section = section;
 
       const link = document.createElement("a");
       link.href = `/album/${album.album_id}`;
@@ -443,7 +646,7 @@
       meta.className = "album-meta";
       const title = document.createElement("div");
       title.className = "album-title";
-      title.textContent = album.title;
+      title.textContent = album.title || "(untitled)";
       title.title = album.title;
       meta.appendChild(title);
       if (album.created_at) {
@@ -455,34 +658,35 @@
       link.appendChild(meta);
       card.appendChild(link);
 
-      const removeBtn = document.createElement("button");
-      removeBtn.type = "button";
-      removeBtn.className = "remove-btn";
-      removeBtn.textContent = "×";
-      removeBtn.title = "Remove from collection";
-      removeBtn.setAttribute("aria-label", "Remove from collection");
-      removeBtn.addEventListener("click", (e) => {
+      const radio = document.createElement("div");
+      radio.className = "radio";
+      radio.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 3.5L6 11l-3.5-3.5L1 9l5 5 9-9z"/></svg>';
+      radio.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        removeAlbum(album);
+        toggleSelection(album.album_id, section);
       });
-      card.appendChild(removeBtn);
+      card.appendChild(radio);
+
+      link.addEventListener("click", (e) => {
+        if (document.body.classList.contains("selecting")) {
+          e.preventDefault();
+          toggleSelection(album.album_id, section);
+        }
+      });
 
       return card;
     }
 
-    function renderAlbums(albums) {
-      grid.innerHTML = "";
-      loading.hidden = true;
-      memberAlbumIds = new Set(albums.map(a => a.album_id));
+    function renderSection(gridEl, emptyEl, countEl, albums, section) {
+      gridEl.innerHTML = "";
+      countEl.textContent = albums.length ? `(${albums.length})` : "";
       if (!albums.length) {
-        empty.hidden = false;
-        grid.hidden = true;
+        emptyEl.hidden = false;
         return;
       }
-      empty.hidden = true;
-      grid.hidden = false;
-      for (const a of albums) grid.appendChild(buildAlbumCard(a));
+      emptyEl.hidden = true;
+      for (const a of albums) gridEl.appendChild(buildAlbumCard(a, section));
     }
 
     async function fetchCollection() {
@@ -492,32 +696,104 @@
     }
 
     async function refresh() {
+      exitSelectMode();
       try {
         const data = await fetchCollection();
         titleEl.textContent = data.title || "(untitled)";
         document.title = data.title ? `Collection · ${data.title}` : "Collection";
-        renderAlbums(data.albums || []);
+        if (data.public_url) {
+          publicUrlEl.hidden = false;
+          publicUrlLink.href = data.public_url;
+          publicUrlLink.textContent = data.public_url;
+        }
+        const listed = data.listed_albums || [];
+        const unlisted = data.unlisted_albums || [];
+        memberAlbumIds = new Set(
+          [...listed, ...unlisted].map(a => a.album_id)
+        );
+        loading.hidden = true;
+        if (!listed.length && !unlisted.length) {
+          empty.hidden = false;
+          sectionsEl.hidden = true;
+          return;
+        }
+        empty.hidden = true;
+        sectionsEl.hidden = false;
+        renderSection(listedGrid, listedEmpty, listedCount, listed, "listed");
+        renderSection(unlistedGrid, unlistedEmpty, unlistedCount, unlisted, "unlisted");
       } catch (err) {
         loading.textContent = `Failed to load collection: ${err.message}`;
         loading.hidden = false;
       }
     }
 
-    async function removeAlbum(album) {
-      if (!confirm(`Remove "${album.title}" from this collection?`)) return;
+    copyUrlBtn.addEventListener("click", async () => {
       try {
-        const resp = await fetch(
-          `/api/collections/${encodeURIComponent(collectionId)}/albums/${encodeURIComponent(album.album_id)}`,
-          { method: "DELETE" }
-        );
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        statusEl.textContent = `Removed “${album.title}”.`;
+        await navigator.clipboard.writeText(publicUrlLink.href);
+        statusEl.textContent = "Copied public link.";
+        setTimeout(() => { statusEl.textContent = ""; }, 3000);
+      } catch (_e) {
+        statusEl.textContent = "Copy failed — select and copy manually.";
+      }
+    });
+
+    cancelSelectBtn.addEventListener("click", exitSelectMode);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        if (backdrop.classList.contains("visible")) closePicker();
+        else if (document.body.classList.contains("selecting")) exitSelectMode();
+      }
+    });
+
+    actionPrimaryBtn.addEventListener("click", async () => {
+      if (selected.size === 0) return;
+      const toVisibility = activeSection === "listed" ? "unlisted" : "listed";
+      const ids = Array.from(selected);
+      actionPrimaryBtn.disabled = true;
+      actionRemoveBtn.disabled = true;
+      try {
+        for (const aid of ids) {
+          const resp = await fetch(
+            `/api/collections/${encodeURIComponent(collectionId)}/albums/${encodeURIComponent(aid)}/visibility`,
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ visibility: toVisibility }),
+            }
+          );
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        }
+        statusEl.textContent = `${pluralize(ids.length, "album")} moved to ${toVisibility}.`;
         setTimeout(() => { statusEl.textContent = ""; }, 4000);
-        refresh();
+        await refresh();
+      } catch (err) {
+        statusEl.textContent = `Update failed: ${err.message}`;
+        updateSelectBar();
+      }
+    });
+
+    actionRemoveBtn.addEventListener("click", async () => {
+      if (selected.size === 0) return;
+      const ids = Array.from(selected);
+      if (!confirm(`Remove ${pluralize(ids.length, "album")} from this collection?`)) return;
+      actionPrimaryBtn.disabled = true;
+      actionRemoveBtn.disabled = true;
+      try {
+        for (const aid of ids) {
+          const resp = await fetch(
+            `/api/collections/${encodeURIComponent(collectionId)}/albums/${encodeURIComponent(aid)}`,
+            { method: "DELETE" }
+          );
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        }
+        statusEl.textContent = `Removed ${pluralize(ids.length, "album")}.`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        await refresh();
       } catch (err) {
         statusEl.textContent = `Remove failed: ${err.message}`;
+        updateSelectBar();
       }
-    }
+    });
 
     function renderPicker() {
       const filter = modalFilter.value.trim().toLowerCase();
@@ -620,9 +896,6 @@
     modalCancel.addEventListener("click", closePicker);
     backdrop.addEventListener("click", (e) => {
       if (e.target === backdrop) closePicker();
-    });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && backdrop.classList.contains("visible")) closePicker();
     });
     modalFilter.addEventListener("input", renderPicker);
 
