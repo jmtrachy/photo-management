@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collection</title>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --fg: #222;
+      --muted: #888;
+      --border: #e5e5e5;
+      --card: #ffffff;
+      --accent: #2266dd;
+      --danger: #b03030;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .top-header {
+      flex: 0 0 auto;
+      padding: 0.55rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .top-header h1 {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .top-header a.signout {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    .top-header a.signout:hover { color: var(--fg); text-decoration: underline; }
+
+    .layout {
+      flex: 1 1 auto;
+      display: flex;
+      min-height: 0;
+    }
+    .sidebar {
+      flex: 0 0 220px;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 1rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      overflow-y: auto;
+    }
+    .sidebar-section { display: flex; flex-direction: column; gap: 0.2rem; }
+    .nav-link {
+      display: block;
+      padding: 0.5rem 0.85rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-radius: 6px;
+    }
+    .nav-link:hover { color: var(--fg); background: var(--bg); }
+    .nav-link.active {
+      color: var(--accent);
+      background: rgba(34, 102, 221, 0.08);
+    }
+
+    .new-btn {
+      display: block;
+      width: 100%;
+      padding: 0.5rem 0.85rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .new-btn:hover { filter: brightness(1.1); }
+    .status {
+      color: var(--muted);
+      font-size: 0.85rem;
+      padding: 0 0.1rem;
+      word-break: break-word;
+    }
+    .status:empty { display: none; }
+
+    main {
+      flex: 1 1 auto;
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    @media (max-width: 720px) {
+      .layout { flex-direction: column; }
+      .sidebar {
+        flex: 0 0 auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      main { padding: 1.25rem; }
+    }
+
+    .page-header {
+      margin: 0 0 1.25rem;
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+    }
+    .page-header h2 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .page-header .breadcrumb {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-decoration: none;
+    }
+    .page-header .breadcrumb:hover { color: var(--fg); text-decoration: underline; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .album-card {
+      position: relative;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      color: inherit;
+      text-decoration: none;
+    }
+    .album-card:hover { border-color: var(--accent); }
+    .album-card .cover {
+      aspect-ratio: 1;
+      width: 100%;
+      background: #ececec;
+      overflow: hidden;
+    }
+    .album-card .cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .album-meta {
+      padding: 0.55rem 0.7rem 0.65rem;
+    }
+    .album-title {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--fg);
+      margin: 0 0 0.2rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .album-meta-date {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .remove-btn {
+      position: absolute;
+      top: 0.4rem;
+      right: 0.4rem;
+      width: 1.6rem;
+      height: 1.6rem;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.55);
+      color: white;
+      font-size: 0.85rem;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s;
+      font-family: inherit;
+    }
+    .album-card:hover .remove-btn,
+    .remove-btn:focus { opacity: 1; }
+    .remove-btn:hover { background: var(--danger); }
+
+    .empty, .loading {
+      color: var(--muted);
+      font-style: italic;
+      padding: 4rem 1rem;
+      text-align: center;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      visibility: hidden;
+    }
+    .modal-backdrop.visible { visibility: visible; }
+    .modal {
+      background: var(--card);
+      border-radius: 8px;
+      padding: 1.5rem;
+      width: min(520px, 90vw);
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    }
+    .modal h2 {
+      margin: 0 0 1rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .modal-filter {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      font-size: 0.95rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      margin-bottom: 0.75rem;
+    }
+    .modal-filter:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .album-pick-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      overflow-y: auto;
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .album-pick-row {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      padding: 0.55rem 0.7rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .album-pick-row:last-child { border-bottom: none; }
+    .album-pick-row:hover { background: var(--bg); }
+    .album-pick-row input[type="checkbox"] { flex-shrink: 0; }
+    .album-pick-row .album-row-cover {
+      width: 36px;
+      height: 36px;
+      border-radius: 4px;
+      background: #ececec;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .album-pick-row .album-row-cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .album-pick-row .album-pick-title {
+      flex: 1;
+      font-size: 0.9rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .album-pick-row.in-collection {
+      color: var(--muted);
+      cursor: default;
+    }
+    .album-pick-row.in-collection:hover { background: transparent; }
+    .album-pick-tag {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+    .modal-loading, .modal-empty {
+      padding: 1.5rem 0.5rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .modal-empty { font-style: italic; }
+    .modal-error {
+      margin-top: 0.5rem;
+      color: var(--danger);
+      font-size: 0.85rem;
+      min-height: 1em;
+    }
+    .modal-actions {
+      margin-top: 1rem;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .modal-actions .count {
+      flex: 1;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .modal-actions button {
+      padding: 0.45rem 1rem;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .modal-actions .cancel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+    .modal-actions .cancel:hover { background: var(--bg); }
+    .modal-actions .submit {
+      background: var(--accent);
+      color: white;
+      border: none;
+    }
+    .modal-actions .submit:hover { filter: brightness(1.1); }
+    .modal-actions .submit:disabled {
+      filter: grayscale(0.5);
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <header class="top-header">
+    <h1>Your Photographs</h1>
+    <a class="signout" href="/logout">Sign out</a>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <nav class="sidebar-section">
+        <a class="nav-link" href="/">All Photos</a>
+        <a class="nav-link" href="/albums">Albums</a>
+        <a class="nav-link active" href="/collections">Collections</a>
+      </nav>
+      <div class="sidebar-section">
+        <button id="add-albums-btn" class="new-btn" type="button">Add albums</button>
+      </div>
+      <div id="status" class="status sidebar-section"></div>
+    </aside>
+    <main>
+      <div class="page-header">
+        <a class="breadcrumb" href="/collections">Collections</a>
+        <span class="breadcrumb">›</span>
+        <h2 id="collection-title">…</h2>
+      </div>
+      <div id="grid" class="grid" hidden></div>
+      <div id="empty" class="empty" hidden>No albums in this collection yet.</div>
+      <div id="loading" class="loading">Loading…</div>
+    </main>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal">
+      <h2 id="modal-title">Add albums</h2>
+      <input id="modal-filter" class="modal-filter" type="text" placeholder="Filter by title…" autocomplete="off">
+      <div id="modal-loading" class="modal-loading">Loading…</div>
+      <div id="modal-empty" class="modal-empty" hidden>No albums found.</div>
+      <ul id="modal-list" class="album-pick-list" hidden></ul>
+      <div id="modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <span class="count" id="modal-count">0 selected</span>
+        <button type="button" class="cancel" id="modal-cancel">Cancel</button>
+        <button type="button" class="submit" id="modal-submit" disabled>Add</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const collectionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
+    const titleEl = document.getElementById("collection-title");
+    const grid = document.getElementById("grid");
+    const empty = document.getElementById("empty");
+    const loading = document.getElementById("loading");
+    const statusEl = document.getElementById("status");
+    const addBtn = document.getElementById("add-albums-btn");
+
+    const backdrop = document.getElementById("modal-backdrop");
+    const modalFilter = document.getElementById("modal-filter");
+    const modalLoading = document.getElementById("modal-loading");
+    const modalEmpty = document.getElementById("modal-empty");
+    const modalList = document.getElementById("modal-list");
+    const modalError = document.getElementById("modal-error");
+    const modalCancel = document.getElementById("modal-cancel");
+    const modalSubmit = document.getElementById("modal-submit");
+    const modalCount = document.getElementById("modal-count");
+
+    let memberAlbumIds = new Set();
+    let pickerAlbums = [];
+    let pickerSelected = new Set();
+
+    function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
+
+    function buildAlbumCard(album) {
+      const card = document.createElement("div");
+      card.className = "album-card";
+
+      const link = document.createElement("a");
+      link.href = `/album/${album.album_id}`;
+      link.style.display = "contents";
+      link.style.color = "inherit";
+      link.style.textDecoration = "none";
+
+      const cover = document.createElement("div");
+      cover.className = "cover";
+      if (album.cover_thumb_url) {
+        const img = document.createElement("img");
+        img.src = album.cover_thumb_url;
+        img.alt = "";
+        img.loading = "lazy";
+        cover.appendChild(img);
+      }
+      link.appendChild(cover);
+
+      const meta = document.createElement("div");
+      meta.className = "album-meta";
+      const title = document.createElement("div");
+      title.className = "album-title";
+      title.textContent = album.title;
+      title.title = album.title;
+      meta.appendChild(title);
+      if (album.created_at) {
+        const date = document.createElement("div");
+        date.className = "album-meta-date";
+        date.textContent = new Date(album.created_at * 1000).toISOString().slice(0, 10);
+        meta.appendChild(date);
+      }
+      link.appendChild(meta);
+      card.appendChild(link);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "remove-btn";
+      removeBtn.textContent = "×";
+      removeBtn.title = "Remove from collection";
+      removeBtn.setAttribute("aria-label", "Remove from collection");
+      removeBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        removeAlbum(album);
+      });
+      card.appendChild(removeBtn);
+
+      return card;
+    }
+
+    function renderAlbums(albums) {
+      grid.innerHTML = "";
+      loading.hidden = true;
+      memberAlbumIds = new Set(albums.map(a => a.album_id));
+      if (!albums.length) {
+        empty.hidden = false;
+        grid.hidden = true;
+        return;
+      }
+      empty.hidden = true;
+      grid.hidden = false;
+      for (const a of albums) grid.appendChild(buildAlbumCard(a));
+    }
+
+    async function fetchCollection() {
+      const resp = await fetch(`/api/collections/${encodeURIComponent(collectionId)}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
+    }
+
+    async function refresh() {
+      try {
+        const data = await fetchCollection();
+        titleEl.textContent = data.title || "(untitled)";
+        document.title = data.title ? `Collection · ${data.title}` : "Collection";
+        renderAlbums(data.albums || []);
+      } catch (err) {
+        loading.textContent = `Failed to load collection: ${err.message}`;
+        loading.hidden = false;
+      }
+    }
+
+    async function removeAlbum(album) {
+      if (!confirm(`Remove "${album.title}" from this collection?`)) return;
+      try {
+        const resp = await fetch(
+          `/api/collections/${encodeURIComponent(collectionId)}/albums/${encodeURIComponent(album.album_id)}`,
+          { method: "DELETE" }
+        );
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        statusEl.textContent = `Removed “${album.title}”.`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        refresh();
+      } catch (err) {
+        statusEl.textContent = `Remove failed: ${err.message}`;
+      }
+    }
+
+    function renderPicker() {
+      const filter = modalFilter.value.trim().toLowerCase();
+      modalList.innerHTML = "";
+      const visible = pickerAlbums.filter(a =>
+        !filter || (a.title || "").toLowerCase().includes(filter)
+      );
+      if (!visible.length) {
+        modalList.hidden = true;
+        modalEmpty.hidden = false;
+        return;
+      }
+      modalEmpty.hidden = true;
+      modalList.hidden = false;
+      for (const a of visible) {
+        const li = document.createElement("li");
+        li.className = "album-pick-row";
+        const inCollection = memberAlbumIds.has(a.album_id);
+        if (inCollection) li.classList.add("in-collection");
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.disabled = inCollection;
+        checkbox.checked = pickerSelected.has(a.album_id);
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) pickerSelected.add(a.album_id);
+          else pickerSelected.delete(a.album_id);
+          updatePickerCount();
+        });
+        li.appendChild(checkbox);
+
+        const cover = document.createElement("div");
+        cover.className = "album-row-cover";
+        if (a.cover_thumb_url) {
+          const img = document.createElement("img");
+          img.src = a.cover_thumb_url;
+          img.alt = "";
+          img.loading = "lazy";
+          cover.appendChild(img);
+        }
+        li.appendChild(cover);
+
+        const title = document.createElement("div");
+        title.className = "album-pick-title";
+        title.textContent = a.title || "(untitled)";
+        title.title = a.title;
+        li.appendChild(title);
+
+        if (inCollection) {
+          const tag = document.createElement("span");
+          tag.className = "album-pick-tag";
+          tag.textContent = "in collection";
+          li.appendChild(tag);
+        } else {
+          li.addEventListener("click", (e) => {
+            if (e.target.tagName !== "INPUT") {
+              checkbox.checked = !checkbox.checked;
+              checkbox.dispatchEvent(new Event("change"));
+            }
+          });
+        }
+        modalList.appendChild(li);
+      }
+    }
+
+    function updatePickerCount() {
+      const n = pickerSelected.size;
+      modalCount.textContent = `${n} selected`;
+      modalSubmit.disabled = n === 0;
+    }
+
+    async function openPicker() {
+      modalError.textContent = "";
+      modalFilter.value = "";
+      pickerSelected = new Set();
+      updatePickerCount();
+      modalLoading.hidden = false;
+      modalList.hidden = true;
+      modalEmpty.hidden = true;
+      backdrop.classList.add("visible");
+      try {
+        const resp = await fetch("/api/albums");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        pickerAlbums = data.albums || [];
+        modalLoading.hidden = true;
+        renderPicker();
+        modalFilter.focus();
+      } catch (err) {
+        modalLoading.hidden = true;
+        modalError.textContent = `Failed to load albums: ${err.message}`;
+      }
+    }
+
+    function closePicker() {
+      backdrop.classList.remove("visible");
+    }
+
+    addBtn.addEventListener("click", openPicker);
+    modalCancel.addEventListener("click", closePicker);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closePicker();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && backdrop.classList.contains("visible")) closePicker();
+    });
+    modalFilter.addEventListener("input", renderPicker);
+
+    modalSubmit.addEventListener("click", async () => {
+      const ids = Array.from(pickerSelected);
+      if (!ids.length) return;
+      modalSubmit.disabled = true;
+      modalError.textContent = "";
+      try {
+        const resp = await fetch(
+          `/api/collections/${encodeURIComponent(collectionId)}/albums`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ album_ids: ids }),
+          }
+        );
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        closePicker();
+        statusEl.textContent = `Added ${pluralize(data.added, "album")}.`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        refresh();
+      } catch (err) {
+        modalError.textContent = err.message;
+        modalSubmit.disabled = false;
+      }
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
