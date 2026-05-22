@@ -250,6 +250,59 @@
     }
     .status:empty { display: none; }
 
+    .subjects-help {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+    .chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      margin-bottom: 0.4rem;
+    }
+    .chip-list:empty { display: none; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.15rem 0.55rem;
+      background: rgba(34, 102, 221, 0.08);
+      color: var(--accent);
+      border-radius: 999px;
+      font-size: 0.78rem;
+      max-width: 100%;
+    }
+    .chip-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chip-remove {
+      background: none;
+      border: none;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 0.85rem;
+      line-height: 1;
+      padding: 0;
+      font-family: inherit;
+      opacity: 0.7;
+    }
+    .chip-remove:hover { opacity: 1; }
+    .subject-input {
+      width: 100%;
+      padding: 0.35rem 0.55rem;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+    }
+    .subject-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
     .shares-list {
       display: flex;
       flex-direction: column;
@@ -536,6 +589,12 @@
         <div id="shares-list" class="shares-list"></div>
       </div>
       <div class="sidebar-section">
+        <div class="sidebar-label">Subjects</div>
+        <div class="subjects-help">Used to route photos by filename when this album is in a Collection. Press Enter to add.</div>
+        <div id="chip-list" class="chip-list"></div>
+        <input id="subject-input" class="subject-input" type="text" maxlength="64" placeholder="Add a subject…" autocomplete="off">
+      </div>
+      <div class="sidebar-section">
         <div class="sidebar-label">Stats</div>
         <div id="album-meta" class="album-stats"></div>
       </div>
@@ -571,10 +630,85 @@
     const shareBtn = document.getElementById("share-btn");
     const sharesContainer = document.getElementById("shares");
     const sharesList = document.getElementById("shares-list");
+    const chipListEl = document.getElementById("chip-list");
+    const subjectInput = document.getElementById("subject-input");
+    let currentSubjects = [];
     const resetBackdrop = document.getElementById("reset-modal-backdrop");
     const resetYesBtn = document.getElementById("reset-yes-btn");
     const resetNoBtn = document.getElementById("reset-no-btn");
     const resetErrorEl = document.getElementById("reset-modal-error");
+
+    function renderChips() {
+      chipListEl.innerHTML = "";
+      for (const subject of currentSubjects) {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        const label = document.createElement("span");
+        label.className = "chip-label";
+        label.textContent = subject;
+        label.title = subject;
+        chip.appendChild(label);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "chip-remove";
+        remove.textContent = "×";
+        remove.setAttribute("aria-label", `Remove subject ${subject}`);
+        remove.addEventListener("click", () => removeSubject(subject));
+        chip.appendChild(remove);
+        chipListEl.appendChild(chip);
+      }
+    }
+
+    async function saveSubjects(next) {
+      try {
+        const resp = await fetch(
+          `/api/albums/${encodeURIComponent(albumId)}/subjects`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subjects: next }),
+          }
+        );
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        currentSubjects = data.subjects || [];
+        renderChips();
+      } catch (err) {
+        statusEl.textContent = `Subjects save failed: ${err.message}`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    }
+
+    function addSubject(raw) {
+      const cleaned = (raw || "").trim().slice(0, 64);
+      if (!cleaned) return;
+      const key = cleaned.toLowerCase();
+      if (currentSubjects.some(s => s.toLowerCase() === key)) {
+        subjectInput.value = "";
+        return;
+      }
+      saveSubjects([...currentSubjects, cleaned]);
+      subjectInput.value = "";
+    }
+
+    function removeSubject(subject) {
+      const next = currentSubjects.filter(s => s !== subject);
+      saveSubjects(next);
+    }
+
+    subjectInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addSubject(subjectInput.value);
+      }
+    });
 
     function renderMeta(data) {
       metaEl.innerHTML = "";
@@ -854,6 +988,8 @@
         titleEl.textContent = data.title || "Untitled album";
         document.title = data.title ? `${data.title} — Album` : "Album";
         currentCoverPhotoId = data.cover_photo_id || null;
+        currentSubjects = data.subjects || [];
+        renderChips();
         renderMeta(data);
 
         loading.hidden = true;
