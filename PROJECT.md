@@ -149,7 +149,7 @@ When an album is added to a Collection as **listed**, or promoted from unlisted�
   * Listed selection → "Unlist" (sets membership `visibility="unlisted"`) and "Remove" (removes from collection)
   * Unlisted selection → "List" (sets `visibility="listed"` — also runs the slug-mint rule above) and "Remove"
 6. The select-mode bar shows the count of selected albums and a Cancel link. Esc also exits selection mode.
-7. "Add albums" button opens a picker modal with substring search over album titles (same pattern as the Add-to-album modal in Story 4). Multi-select so a season's worth of games can be added in one pass. Newly-added albums default to **listed**.
+7. "Add albums" button opens a picker modal with substring search over album titles (same pattern as the Add-to-album modal in Story 4). Multi-select so a season's worth of games can be added in one pass. A "Add as" radio at the top of the picker lets the batch land as **listed** or **unlisted**; default is **listed**.
 
 #### Deletion
 Hard delete: removes the Collection row and every `CollectionAlbums` row. Album-shares that the Collection minted remain alive — share URLs are permanent (Story 6).

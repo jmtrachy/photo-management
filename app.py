@@ -695,6 +695,7 @@ class CreateCollectionRequest(BaseModel):
 
 class AddAlbumsToCollectionRequest(BaseModel):
     album_ids: list[str]
+    visibility: str = "listed"
 
 
 class SetVisibilityRequest(BaseModel):
@@ -959,6 +960,11 @@ async def add_albums_to_collection(
             status_code=400,
             detail=f"Cannot add more than {ADD_TO_COLLECTION_MAX} albums at once",
         )
+    if payload.visibility not in ("listed", "unlisted"):
+        raise HTTPException(
+            status_code=400,
+            detail="visibility must be 'listed' or 'unlisted'",
+        )
 
     seen: set[str] = set()
     unique_ids: list[str] = []
@@ -995,7 +1001,7 @@ async def add_albums_to_collection(
                     "pk": f"COLLECTION#{collection_id}",
                     "sk": f"ALBUM#{aid}",
                     "created_at": now,
-                    "visibility": "listed",
+                    "visibility": payload.visibility,
                 }
             )
             added += 1
@@ -1006,10 +1012,15 @@ async def add_albums_to_collection(
                 "event": "albums_added_to_collection",
                 "collection_id": collection_id,
                 "added": added,
+                "visibility": payload.visibility,
             }
         )
     )
-    return {"collection_id": collection_id, "added": added}
+    return {
+        "collection_id": collection_id,
+        "added": added,
+        "visibility": payload.visibility,
+    }
 
 
 @app.put("/api/collections/{collection_id}/albums/{album_id}/visibility")

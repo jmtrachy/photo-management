@@ -341,6 +341,26 @@
       font-size: 1.1rem;
       font-weight: 600;
     }
+    .visibility-choice {
+      border: none;
+      padding: 0;
+      margin: 0 0 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .visibility-choice legend {
+      padding: 0;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .visibility-choice label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
     .modal-filter {
       width: 100%;
       padding: 0.5rem 0.65rem;
@@ -518,6 +538,11 @@
   <div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal">
       <h2 id="modal-title">Add albums</h2>
+      <fieldset class="visibility-choice">
+        <legend>Add as</legend>
+        <label><input type="radio" name="add-visibility" value="listed" checked> Listed</label>
+        <label><input type="radio" name="add-visibility" value="unlisted"> Unlisted</label>
+      </fieldset>
       <input id="modal-filter" class="modal-filter" type="text" placeholder="Filter by title…" autocomplete="off">
       <div id="modal-loading" class="modal-loading">Loading…</div>
       <div id="modal-empty" class="modal-empty" hidden>No albums found.</div>
@@ -902,6 +927,9 @@
     modalSubmit.addEventListener("click", async () => {
       const ids = Array.from(pickerSelected);
       if (!ids.length) return;
+      const visibility = document.querySelector(
+        'input[name="add-visibility"]:checked'
+      )?.value || "listed";
       modalSubmit.disabled = true;
       modalError.textContent = "";
       try {
@@ -910,7 +938,7 @@
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ album_ids: ids }),
+            body: JSON.stringify({ album_ids: ids, visibility }),
           }
         );
         if (!resp.ok) {
@@ -923,7 +951,7 @@
         }
         const data = await resp.json();
         closePicker();
-        statusEl.textContent = `Added ${pluralize(data.added, "album")}.`;
+        statusEl.textContent = `Added ${pluralize(data.added, "album")} as ${visibility}.`;
         setTimeout(() => { statusEl.textContent = ""; }, 4000);
         refresh();
       } catch (err) {
