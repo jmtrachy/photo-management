@@ -55,6 +55,13 @@ class PhotoManagementStack(Stack):
             ),
         )
 
+        photos_table.add_global_secondary_index(
+            index_name="BySha256",
+            partition_key=dynamodb.Attribute(
+                name="sha256", type=dynamodb.AttributeType.STRING
+            ),
+        )
+
         albums_table = dynamodb.Table(
             self,
             "AlbumsTable",

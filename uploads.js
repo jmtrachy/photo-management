@@ -38,12 +38,24 @@
     }
   }
 
-  async function presign(files) {
+  async function sha256Hex(file) {
+    const buf = await file.arrayBuffer();
+    const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(hashBuf))
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  async function presign(files, hashes) {
     const resp = await fetch("/api/uploads/presign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        files: files.map(f => ({ filename: f.name, content_type: f.type })),
+        files: files.map((f, i) => ({
+          filename: f.name,
+          content_type: f.type,
+          sha256: hashes[i],
+        })),
       }),
     });
     if (!resp.ok) throw new Error(`presign HTTP ${resp.status}`);
@@ -128,60 +140,87 @@
       return { processed: [], added: 0, errors: [] };
     }
 
+    setStatus(`Hashing ${accepted.length} photo(s)…`);
+    let hashes;
+    try {
+      hashes = await Promise.all(accepted.map(sha256Hex));
+    } catch (err) {
+      setStatus(`Failed to hash files: ${err.message}`);
+      return { processed: [], added: 0, errors: [err] };
+    }
+
     setStatus(`Requesting upload URLs for ${accepted.length} photo(s)…`);
     let uploads;
     try {
-      uploads = await presign(accepted);
+      uploads = await presign(accepted, hashes);
     } catch (err) {
       setStatus(`Failed to get upload URLs: ${err.message}`);
       return { processed: [], added: 0, errors: [err] };
     }
 
-    const total = accepted.length;
-    let succeeded = 0;
-    const expectedIds = [];
-    const errors = [];
-    setStatus(`Uploading 0/${total}…`);
-    emit("uploading", 0, total, 0);
-
-    await runPool(accepted, PUT_CONCURRENCY, async (f, i) => {
-      try {
-        await withRetry(
-          () => putOne(f, uploads[i]),
-          PUT_RETRIES,
-          PUT_RETRY_BASE_MS,
-        );
-        expectedIds.push(uploads[i].photo_id);
-        succeeded++;
-        setStatus(`Uploading ${succeeded}/${total}…`);
-      } catch (e) {
-        errors.push(e);
+    const reusedIds = [];
+    const toUpload = [];
+    for (let i = 0; i < uploads.length; i++) {
+      if (uploads[i].reused) {
+        reusedIds.push(uploads[i].photo_id);
+      } else {
+        toUpload.push({ file: accepted[i], info: uploads[i] });
       }
-      emit("uploading", succeeded + errors.length, total, errors.length);
-    });
+    }
 
-    if (!expectedIds.length) {
+    const uploadTotal = toUpload.length;
+    let succeeded = 0;
+    const newlyUploadedIds = [];
+    const errors = [];
+    if (uploadTotal > 0) {
+      setStatus(`Uploading 0/${uploadTotal}…`);
+      emit("uploading", 0, uploadTotal, 0);
+      await runPool(toUpload, PUT_CONCURRENCY, async ({ file, info }) => {
+        try {
+          await withRetry(
+            () => putOne(file, info),
+            PUT_RETRIES,
+            PUT_RETRY_BASE_MS,
+          );
+          newlyUploadedIds.push(info.photo_id);
+          succeeded++;
+          setStatus(`Uploading ${succeeded}/${uploadTotal}…`);
+        } catch (e) {
+          errors.push(e);
+        }
+        emit("uploading", succeeded + errors.length, uploadTotal, errors.length);
+      });
+    }
+
+    if (uploadTotal > 0 && !newlyUploadedIds.length && !reusedIds.length) {
       setStatus(`Uploads failed: ${errors.length} error(s).`);
       return { processed: [], added: 0, errors };
     }
 
-    if (errors.length) {
-      setStatus(`Uploaded ${succeeded}/${total}. ${errors.length} failed. Processing…`);
-    } else {
-      setStatus(`Uploaded ${total}. Processing…`);
+    let processedNew = [];
+    if (newlyUploadedIds.length) {
+      const dupNote = reusedIds.length ? ` (${reusedIds.length} duplicate)` : "";
+      if (errors.length) {
+        setStatus(`Uploaded ${succeeded}/${uploadTotal}${dupNote}. ${errors.length} failed. Processing…`);
+      } else {
+        setStatus(`Uploaded ${uploadTotal}${dupNote}. Processing…`);
+      }
+      emit("processing", 0, newlyUploadedIds.length, 0);
+      processedNew = await waitForProcessing(newlyUploadedIds, (foundCount) => {
+        emit("processing", foundCount, newlyUploadedIds.length, 0);
+      });
     }
-    emit("processing", 0, expectedIds.length, 0);
 
-    const processed = await waitForProcessing(expectedIds, (foundCount) => {
-      emit("processing", foundCount, expectedIds.length, 0);
-    });
+    const processed = [...reusedIds, ...processedNew];
     if (!processed.length) {
       setStatus("Photos still processing — try refreshing in a moment.");
       return { processed, added: 0, errors };
     }
 
     if (!albumId) {
-      setStatus("");
+      const dupNote = reusedIds.length ? ` (${reusedIds.length} duplicate)` : "";
+      setStatus(`Uploaded ${processed.length} photo(s)${dupNote}.`);
+      setTimeout(() => setStatus(""), 4000);
       return { processed, added: 0, errors };
     }
 
@@ -196,7 +235,8 @@
       setStatus(`Failed to add to album: ${err.message}`);
       return { processed, added: 0, errors };
     }
-    setStatus(`Added ${pluralize(result.added, "photo")}.`);
+    const dupNote = reusedIds.length ? ` (${reusedIds.length} duplicate)` : "";
+    setStatus(`Added ${pluralize(result.added, "photo")}${dupNote}.`);
     setTimeout(() => setStatus(""), 4000);
     return { processed, added: result.added, errors, album: result };
   }
