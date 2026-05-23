@@ -439,6 +439,56 @@ async def create_album(
     }
 
 
+def _parse_match_token(photo_id: str) -> tuple[str, bool]:
+    """Per Story 11: basename → optional z_ strip → optional trailing _<digits> strip → lowercase."""
+    basename = photo_id.rsplit("--", 1)[0] if "--" in photo_id else photo_id
+    had_z = basename.startswith("z_")
+    token = basename[2:] if had_z else basename
+    token = re.sub(r"_\d+$", "", token)
+    return token.lower(), had_z
+
+
+def _build_routing_context(target_album_id: str) -> dict:
+    """Returns {"target_in_collections": bool, "subject_index": {token: {album_id, ...}}, "album_titles": {album_id: title}}.
+    target_in_collections=False means no routing should happen (target album is not listed in any collection)."""
+    resp = collection_albums_table.query(
+        IndexName="ByAlbum",
+        KeyConditionExpression=Key("sk").eq(f"ALBUM#{target_album_id}"),
+    )
+    listed_collection_ids = [
+        r["pk"].split("#", 1)[1]
+        for r in resp.get("Items", [])
+        if r.get("visibility", "listed") == "listed"
+    ]
+    if not listed_collection_ids:
+        return {
+            "target_in_collections": False,
+            "subject_index": {},
+            "album_titles": {},
+        }
+
+    unlisted_album_ids: set[str] = set()
+    for cid in listed_collection_ids:
+        for m in _collection_album_memberships(cid):
+            if m.get("visibility", "listed") == "unlisted":
+                unlisted_album_ids.add(m["sk"].split("#", 1)[1])
+
+    album_by_id = _batch_get_albums(list(unlisted_album_ids))
+
+    subject_index: dict[str, set[str]] = {}
+    album_titles: dict[str, str] = {}
+    for aid, a in album_by_id.items():
+        album_titles[aid] = a.get("title", "")
+        for subj in (a.get("subjects") or []):
+            subject_index.setdefault(subj.lower(), set()).add(aid)
+
+    return {
+        "target_in_collections": True,
+        "subject_index": subject_index,
+        "album_titles": album_titles,
+    }
+
+
 class AddPhotosRequest(BaseModel):
     photo_ids: list[str]
 
@@ -470,24 +520,61 @@ async def add_photos_to_album(
         request_items = resp.get("UnprocessedKeys") or {}
     photo_by_id = {p["photo_id"]: p for p in photo_items}
 
-    added = 0
+    routing = _build_routing_context(album_id)
+    routing_active = routing["target_in_collections"]
+    subject_index = routing["subject_index"]
+    routing_album_titles = dict(routing["album_titles"])
+    routing_album_titles[album_id] = album.get("title", "")
+
+    audit: list[dict] = []
+    landed_in_target: list[str] = []
     with memberships_table.batch_writer() as batch:
         for pid in payload.photo_ids:
             photo = photo_by_id.get(pid)
             if not photo:
                 continue
-            batch.put_item(
-                Item={
-                    "pk": f"ALBUM#{album_id}",
-                    "sk": f"PHOTO#{pid}",
-                    "taken_at": int(photo.get("taken_at", 0)),
+            token, had_z = _parse_match_token(pid)
+            matched_albums = (
+                subject_index.get(token, set()) if routing_active else set()
+            )
+            destinations: list[str] = []
+            if not (had_z and routing_active):
+                destinations.append(album_id)
+            destinations.extend(sorted(matched_albums))
+
+            taken_at = int(photo.get("taken_at", 0))
+            for dest_id in destinations:
+                batch.put_item(
+                    Item={
+                        "pk": f"ALBUM#{dest_id}",
+                        "sk": f"PHOTO#{pid}",
+                        "taken_at": taken_at,
+                    }
+                )
+            if album_id in destinations:
+                landed_in_target.append(pid)
+
+            warning = None
+            if routing_active and had_z and not matched_albums:
+                warning = "no_subject_match"
+
+            audit.append(
+                {
+                    "photo_id": pid,
+                    "basename": pid.rsplit("--", 1)[0] if "--" in pid else pid,
+                    "added_to": [
+                        {"album_id": dest_id, "title": routing_album_titles.get(dest_id, "")}
+                        for dest_id in destinations
+                    ],
+                    "warning": warning,
                 }
             )
-            added += 1
+
+    added = len(landed_in_target)
 
     if added > 0 and not album.get("cover_photo_id"):
         cover_photo_id = max(
-            (pid for pid in payload.photo_ids if pid in photo_by_id),
+            landed_in_target,
             key=lambda pid: int(photo_by_id[pid].get("taken_at", 0)),
         )
         albums_table.update_item(
@@ -512,10 +599,17 @@ async def add_photos_to_album(
                 "album_id": album_id,
                 "added": added,
                 "requested": len(payload.photo_ids),
+                "routing_active": routing_active,
             }
         )
     )
-    return {"added": added, "title": album["title"], "album_id": album_id}
+    return {
+        "added": added,
+        "title": album["title"],
+        "album_id": album_id,
+        "routing_active": routing_active,
+        "audit": audit,
+    }
 
 
 class RemovePhotosRequest(BaseModel):

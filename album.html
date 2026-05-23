@@ -174,6 +174,129 @@
       border: none;
     }
     .modal-actions .submit:hover { filter: brightness(1.1); }
+    .routing-modal {
+      width: min(720px, 92vw);
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .routing-modal-summary {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .routing-section {
+      margin-bottom: 0.75rem;
+    }
+    .routing-needs {
+      background: rgba(176, 48, 48, 0.06);
+      border: 1px solid rgba(176, 48, 48, 0.2);
+      border-radius: 6px;
+      padding: 0.6rem 0.8rem;
+    }
+    .routing-needs h3 {
+      margin: 0 0 0.4rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #b03030;
+    }
+    .routing-filters {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+    }
+    .routing-filter-chip {
+      padding: 0.25rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--card);
+      font-size: 0.78rem;
+      cursor: pointer;
+      font-family: inherit;
+      color: var(--muted);
+    }
+    .routing-filter-chip:hover { color: var(--fg); }
+    .routing-filter-chip.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    .routing-audit-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow-y: auto;
+      max-height: 50vh;
+    }
+    .routing-needs .routing-audit-list {
+      border: none;
+      max-height: 30vh;
+    }
+    .routing-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .routing-row:last-child { border-bottom: none; }
+    .routing-thumb {
+      width: 40px;
+      height: 40px;
+      border-radius: 4px;
+      background: #ececec;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .routing-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .routing-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+    .routing-basename {
+      font-size: 0.85rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .routing-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+    }
+    .routing-chip {
+      font-size: 0.72rem;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      background: rgba(34, 102, 221, 0.08);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .routing-warn {
+      font-size: 0.72rem;
+      color: #b03030;
+      font-style: italic;
+    }
+    .routing-empty-row {
+      padding: 1rem;
+      text-align: center;
+      color: var(--muted);
+      font-style: italic;
+      font-size: 0.85rem;
+    }
+
     .modal-actions .submit:disabled {
       filter: grayscale(0.5);
       cursor: not-allowed;
@@ -559,6 +682,27 @@
     </div>
   </div>
 
+  <div id="routing-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="routing-modal-title">
+    <div class="modal routing-modal">
+      <h2 id="routing-modal-title">Upload results</h2>
+      <div id="routing-modal-summary" class="routing-modal-summary"></div>
+      <div id="routing-needs-section" class="routing-section routing-needs" hidden>
+        <h3 id="routing-needs-heading">Needs attention</h3>
+        <ul id="routing-needs-list" class="routing-audit-list"></ul>
+      </div>
+      <div class="routing-filters">
+        <button type="button" class="routing-filter-chip active" data-filter="all">All</button>
+        <button type="button" class="routing-filter-chip" data-filter="matched">Matched to subject</button>
+        <button type="button" class="routing-filter-chip" data-filter="no-match">No match</button>
+        <button type="button" class="routing-filter-chip" data-filter="warning">Needs attention</button>
+      </div>
+      <ul id="routing-audit-list" class="routing-audit-list"></ul>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="routing-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div class="layout">
     <aside class="sidebar">
       <nav class="sidebar-section">
@@ -751,6 +895,7 @@
       if (e.key !== "Escape") return;
       if (resetBackdrop.classList.contains("visible")) closeResetModal();
       else if (removeBackdrop.classList.contains("visible")) closeRemoveModal();
+      else if (routingBackdrop.classList.contains("visible")) closeResultsModal();
       else if (selectionMode) exitSelectionMode();
     });
     resetYesBtn.addEventListener("click", async () => {
@@ -1052,9 +1197,150 @@
           onProgress: updateProgress,
         });
         if (result.added > 0) await load();
+        if (result.album?.routing_active && (result.album.audit || []).length) {
+          openResultsModal(result.album);
+        }
       } finally {
         hideProgress();
       }
+    }
+
+    const routingBackdrop = document.getElementById("routing-modal-backdrop");
+    const routingSummary = document.getElementById("routing-modal-summary");
+    const routingNeedsSection = document.getElementById("routing-needs-section");
+    const routingNeedsHeading = document.getElementById("routing-needs-heading");
+    const routingNeedsList = document.getElementById("routing-needs-list");
+    const routingAuditList = document.getElementById("routing-audit-list");
+    const routingCloseBtn = document.getElementById("routing-close-btn");
+    const routingFilterChips = document.querySelectorAll(".routing-filter-chip");
+
+    let routingAuditCache = [];
+    let routingFilter = "all";
+
+    function classifyAuditRow(row) {
+      const dests = row.added_to || [];
+      const inTarget = dests.some(d => d.album_id === albumId);
+      const inOther = dests.some(d => d.album_id !== albumId);
+      return {
+        isWarning: !!row.warning,
+        isMatched: inOther,
+        isNoMatch: inTarget && !inOther,
+        isEmpty: dests.length === 0,
+      };
+    }
+
+    function renderAuditRow(row) {
+      const li = document.createElement("li");
+      li.className = "routing-row";
+
+      const thumb = document.createElement("div");
+      thumb.className = "routing-thumb";
+      const img = document.createElement("img");
+      img.src = `/d/${encodeURIComponent(row.photo_id)}/thumb.jpg`;
+      img.alt = "";
+      img.loading = "lazy";
+      thumb.appendChild(img);
+      li.appendChild(thumb);
+
+      const info = document.createElement("div");
+      info.className = "routing-info";
+
+      const basename = document.createElement("div");
+      basename.className = "routing-basename";
+      basename.textContent = row.basename || row.photo_id;
+      basename.title = row.basename || row.photo_id;
+      info.appendChild(basename);
+
+      const chips = document.createElement("div");
+      chips.className = "routing-chips";
+      const dests = row.added_to || [];
+      if (!dests.length) {
+        const noDest = document.createElement("span");
+        noDest.className = "routing-warn";
+        noDest.textContent = "Not added to any album";
+        chips.appendChild(noDest);
+      } else {
+        for (const dest of dests) {
+          const chip = document.createElement("span");
+          chip.className = "routing-chip";
+          chip.textContent = dest.title || "(untitled)";
+          chips.appendChild(chip);
+        }
+      }
+      info.appendChild(chips);
+
+      if (row.warning === "no_subject_match") {
+        const warn = document.createElement("div");
+        warn.className = "routing-warn";
+        warn.textContent = "No subject match — photo exists in the library but wasn't added to any album.";
+        info.appendChild(warn);
+      }
+
+      li.appendChild(info);
+      return li;
+    }
+
+    function renderResultsModal() {
+      routingAuditList.innerHTML = "";
+      routingNeedsList.innerHTML = "";
+      let warningCount = 0;
+      let visibleCount = 0;
+      for (const row of routingAuditCache) {
+        const c = classifyAuditRow(row);
+        if (c.isWarning) {
+          warningCount++;
+          routingNeedsList.appendChild(renderAuditRow(row));
+        }
+        let pass = false;
+        if (routingFilter === "all") pass = true;
+        else if (routingFilter === "matched") pass = c.isMatched;
+        else if (routingFilter === "no-match") pass = c.isNoMatch;
+        else if (routingFilter === "warning") pass = c.isWarning;
+        if (pass) {
+          visibleCount++;
+          routingAuditList.appendChild(renderAuditRow(row));
+        }
+      }
+      routingNeedsSection.hidden = warningCount === 0;
+      routingNeedsHeading.textContent = `Needs attention (${warningCount})`;
+      if (visibleCount === 0) {
+        const li = document.createElement("li");
+        li.className = "routing-empty-row";
+        li.textContent = "No photos match this filter.";
+        routingAuditList.appendChild(li);
+      }
+    }
+
+    function openResultsModal(albumResult) {
+      routingAuditCache = albumResult.audit || [];
+      routingFilter = "all";
+      for (const chip of routingFilterChips) {
+        chip.classList.toggle("active", chip.dataset.filter === "all");
+      }
+      const photoCount = routingAuditCache.length;
+      const landed = albumResult.added ?? 0;
+      const albumLabel = albumResult.title || "this album";
+      routingSummary.textContent = `${pluralize(photoCount, "photo")} processed. ${landed} added to ${albumLabel}; subject-matched photos were also routed to other albums in the collection.`;
+      renderResultsModal();
+      routingBackdrop.classList.add("visible");
+    }
+
+    function closeResultsModal() {
+      routingBackdrop.classList.remove("visible");
+    }
+
+    routingCloseBtn.addEventListener("click", closeResultsModal);
+    routingBackdrop.addEventListener("click", (e) => {
+      if (e.target === routingBackdrop) closeResultsModal();
+    });
+    for (const chip of routingFilterChips) {
+      chip.addEventListener("click", () => {
+        routingFilter = chip.dataset.filter;
+        for (const c of routingFilterChips) {
+          c.classList.toggle("active", c === chip);
+        }
+        renderResultsModal();
+      });
     }
 
     function renderShares(shares) {
