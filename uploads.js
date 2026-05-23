@@ -84,6 +84,8 @@
   async function addToAlbum(albumId, photoIds, onTick) {
     let totalAdded = 0;
     let title;
+    let routingActive = false;
+    const audit = [];
     for (let i = 0; i < photoIds.length; i += ADD_TO_ALBUM_CHUNK) {
       const chunk = photoIds.slice(i, i + ADD_TO_ALBUM_CHUNK);
       const resp = await fetch(
@@ -105,9 +107,11 @@
       const data = await resp.json();
       totalAdded += data.added;
       title = data.title;
+      if (data.routing_active) routingActive = true;
+      if (Array.isArray(data.audit)) audit.push(...data.audit);
       if (onTick) onTick(i + chunk.length);
     }
-    return { added: totalAdded, title, album_id: albumId };
+    return { added: totalAdded, title, album_id: albumId, routing_active: routingActive, audit };
   }
 
   async function uploadFiles(files, opts = {}) {
