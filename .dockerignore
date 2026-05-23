@@ -1,0 +1,36 @@
+# Source control
+.git/
+.gitignore
+.gitattributes
+
+# IDE / editor
+.idea/
+.vscode/
+.claude/
+.DS_Store
+*.swp
+
+# Python
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# CDK
+cdk.out/
+.cdk.staging/
+
+# Project docs (not needed in any image)
+CLAUDE.md
+PROJECT.md
+PROJECT_RESPONSE.md
+README.md
+
+# OS junk
+Thumbs.db
