@@ -72,6 +72,8 @@ collection_albums_table = dynamodb.Table(COLLECTION_ALBUMS_TABLE)
 ALBUM_TITLE_MAX_LEN = 200
 ADD_TO_ALBUM_MAX = 100
 PHOTOS_EXISTS_MAX = 1000
+ALBUM_SUBJECT_MAX_LEN = 64
+ALBUM_SUBJECTS_MAX = 50
 
 COLLECTION_TITLE_MAX_LEN = 200
 COLLECTION_PAGE_LIMIT = 100
@@ -270,8 +272,34 @@ async def static_uploads_js():
     return Response(content=_UPLOADS_JS, media_type="application/javascript")
 
 
+def _normalize_subjects(raw: list[str] | None) -> list[str]:
+    if not raw:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            continue
+        cleaned = entry.strip()[:ALBUM_SUBJECT_MAX_LEN]
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+        if len(out) >= ALBUM_SUBJECTS_MAX:
+            break
+    return out
+
+
 class CreateAlbumRequest(BaseModel):
     title: str
+    subjects: list[str] | None = None
+
+
+class SetSubjectsRequest(BaseModel):
+    subjects: list[str]
 
 
 @app.get("/api/albums")
@@ -361,6 +389,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
         "created_at": int(item.get("created_at", 0)),
         "cover_photo_id": cover_photo_id,
         "cover_thumb_url": cover_thumb_url,
+        "subjects": list(item.get("subjects") or []),
         "photos": photos,
     }
 
@@ -378,6 +407,8 @@ async def create_album(
             detail=f"Title exceeds {ALBUM_TITLE_MAX_LEN} characters",
         )
 
+    subjects = _normalize_subjects(payload.subjects)
+
     album_id = secrets.token_hex(8)
     now = int(time.time())
     item = {
@@ -387,14 +418,25 @@ async def create_album(
         "title_lower": title.lower(),
         "created_at": now,
         "view_count": 0,
+        "subjects": subjects,
     }
     albums_table.put_item(Item=item)
     logger.info(
         json.dumps(
-            {"event": "album_created", "album_id": album_id, "title": title}
+            {
+                "event": "album_created",
+                "album_id": album_id,
+                "title": title,
+                "subject_count": len(subjects),
+            }
         )
     )
-    return {"album_id": album_id, "title": title, "created_at": now}
+    return {
+        "album_id": album_id,
+        "title": title,
+        "created_at": now,
+        "subjects": subjects,
+    }
 
 
 class AddPhotosRequest(BaseModel):
@@ -585,6 +627,35 @@ async def set_album_cover(
     return {"album_id": album_id, "cover_photo_id": payload.photo_id}
 
 
+@app.put("/api/albums/{album_id}/subjects")
+async def set_album_subjects(
+    album_id: str,
+    payload: SetSubjectsRequest,
+    _email: str = Depends(require_admin),
+):
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    subjects = _normalize_subjects(payload.subjects)
+
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="SET subjects = :s",
+        ExpressionAttributeValues={":s": subjects},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "album_subjects_set",
+                "album_id": album_id,
+                "subject_count": len(subjects),
+            }
+        )
+    )
+    return {"album_id": album_id, "subjects": subjects}
+
+
 @app.post("/api/albums/{album_id}/reset-counts")
 async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)):
     album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
@@ -624,6 +695,7 @@ class CreateCollectionRequest(BaseModel):
 
 class AddAlbumsToCollectionRequest(BaseModel):
     album_ids: list[str]
+    visibility: str = "listed"
 
 
 class SetVisibilityRequest(BaseModel):
@@ -888,6 +960,11 @@ async def add_albums_to_collection(
             status_code=400,
             detail=f"Cannot add more than {ADD_TO_COLLECTION_MAX} albums at once",
         )
+    if payload.visibility not in ("listed", "unlisted"):
+        raise HTTPException(
+            status_code=400,
+            detail="visibility must be 'listed' or 'unlisted'",
+        )
 
     seen: set[str] = set()
     unique_ids: list[str] = []
@@ -924,7 +1001,7 @@ async def add_albums_to_collection(
                     "pk": f"COLLECTION#{collection_id}",
                     "sk": f"ALBUM#{aid}",
                     "created_at": now,
-                    "visibility": "listed",
+                    "visibility": payload.visibility,
                 }
             )
             added += 1
@@ -935,10 +1012,15 @@ async def add_albums_to_collection(
                 "event": "albums_added_to_collection",
                 "collection_id": collection_id,
                 "added": added,
+                "visibility": payload.visibility,
             }
         )
     )
-    return {"collection_id": collection_id, "added": added}
+    return {
+        "collection_id": collection_id,
+        "added": added,
+        "visibility": payload.visibility,
+    }
 
 
 @app.put("/api/collections/{collection_id}/albums/{album_id}/visibility")
@@ -1280,16 +1362,15 @@ async def public_collection_page(share_id: str):
 
 
 @app.get("/api/public/collections/{share_id}")
-async def get_public_collection(share_id: str, request: Request):
+async def get_public_collection(share_id: str):
     _share, collection = _resolve_collection_share(share_id)
     collection_id = collection["collection_id"]
 
-    if not get_current_email(request):
-        collections_table.update_item(
-            Key={"collection_id": collection_id},
-            UpdateExpression="ADD view_count :one",
-            ExpressionAttributeValues={":one": 1},
-        )
+    collections_table.update_item(
+        Key={"collection_id": collection_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
 
     memberships = _collection_album_memberships(collection_id)
     listed_memberships = [

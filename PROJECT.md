@@ -42,7 +42,7 @@ When logging into the site, the first screen I land on is a grid of all my Album
 * The thumbnail is the photo previously specified as the album's cover image
 * Albums load a page at a time, ordered most-recently-created first
 * Infinite scroll: as the viewer nears the end of the current page, the next page loads
-* View count is `album.view_count` — incremented only by public (non-admin) visits to the album's share page
+* View count is `album.view_count` — incremented on every load of the album's public share page (`/a/<slug>`). Admin browsing via `/album/<id>` doesn't touch the counter. The public endpoint is intentionally session-agnostic, so an admin who visits the public URL will count just like any other visitor.
 
 ### 2 - As an Admin I can view all recently added photos
 A navigation element titled "Photos" shows a grid of my photos, most-recently-taken first. When a photo has no embedded timestamp, its upload time is the fallback.
@@ -50,7 +50,7 @@ A navigation element titled "Photos" shows a grid of my photos, most-recently-ta
 2. Clicking a thumbnail opens the photo detail view (Story 3)
 3. Photos load a page at a time with infinite scroll
 4. Group the grid by taken-date, with a dated divider between groups in the format `YYYY-MM-DD`
-5. View and download counts reflect public traffic only — admin sessions don't increment them
+5. View and download counts come from the public endpoints (`/a/<slug>`, the download endpoint, etc.) and increment unconditionally per visit. Admin browsing uses separate admin paths that don't touch the counters; an admin who visits a public URL is treated like any other visitor and counts.
 
 ### 3 - As an Admin I can view the details of a particular photo
 Clicking a photo opens its detail view, which shows:
@@ -126,7 +126,7 @@ the whole team).
 3. Each card shows: cover photo (grey placeholder if the album has no cover yet), album title, and creation date in small text underneath.
 4. Cards order most-recently-created-album first.
 5. Clicking a card navigates to that album's public viewer at `/a/<album-share-slug>` (see slug-mint rules below).
-6. `Collection.view_count` increments atomically on each public page load — admin sessions don't count.
+6. `Collection.view_count` increments atomically on each load of `/api/public/collections/<slug>`. The public endpoint is intentionally session-agnostic — admin visits to the public URL count like any other visitor. (Admin browsing via the `/collection/<id>` admin page doesn't touch the counter.)
 
 #### Slug-mint rules for cards
 When an album is added to a Collection as **listed**, or promoted from unlisted→listed:
@@ -149,7 +149,7 @@ When an album is added to a Collection as **listed**, or promoted from unlisted�
   * Listed selection → "Unlist" (sets membership `visibility="unlisted"`) and "Remove" (removes from collection)
   * Unlisted selection → "List" (sets `visibility="listed"` — also runs the slug-mint rule above) and "Remove"
 6. The select-mode bar shows the count of selected albums and a Cancel link. Esc also exits selection mode.
-7. "Add albums" button opens a picker modal with substring search over album titles (same pattern as the Add-to-album modal in Story 4). Multi-select so a season's worth of games can be added in one pass. Newly-added albums default to **listed**.
+7. "Add albums" button opens a picker modal with substring search over album titles (same pattern as the Add-to-album modal in Story 4). Multi-select so a season's worth of games can be added in one pass. A "Add as" radio at the top of the picker lets the batch land as **listed** or **unlisted**; default is **listed**.
 
 #### Deletion
 Hard delete: removes the Collection row and every `CollectionAlbums` row. Album-shares that the Collection minted remain alive — share URLs are permanent (Story 6).
