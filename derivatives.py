@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import logging
@@ -47,6 +48,7 @@ def process_record(record):
 
     obj = s3.get_object(Bucket=bucket, Key=key)
     image_bytes = obj["Body"].read()
+    sha256 = hashlib.sha256(image_bytes).hexdigest()
 
     img = Image.open(io.BytesIO(image_bytes))
     img.load()
@@ -68,6 +70,7 @@ def process_record(record):
         "width": int(width),
         "height": int(height),
         "size_bytes": size_bytes,
+        "sha256": sha256,
         "exif": exif_summary,
         "view_count": 0,
         "download_count": 0,

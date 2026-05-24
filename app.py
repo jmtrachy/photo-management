@@ -526,55 +526,94 @@ async def add_photos_to_album(
     routing_album_titles = dict(routing["album_titles"])
     routing_album_titles[album_id] = album.get("title", "")
 
-    audit: list[dict] = []
-    landed_in_target: list[str] = []
-    with memberships_table.batch_writer() as batch:
-        for pid in payload.photo_ids:
-            photo = photo_by_id.get(pid)
-            if not photo:
-                continue
-            token, had_z = _parse_match_token(pid)
-            matched_albums = (
-                subject_index.get(token, set()) if routing_active else set()
-            )
-            destinations: list[str] = []
-            if not (had_z and routing_active):
-                destinations.append(album_id)
-            destinations.extend(sorted(matched_albums))
+    # Stage 1: compute per-photo plans (destinations + warning) without writing.
+    plans: list[dict] = []
+    for pid in payload.photo_ids:
+        photo = photo_by_id.get(pid)
+        if not photo:
+            continue
+        token, had_z = _parse_match_token(pid)
+        matched_albums = (
+            subject_index.get(token, set()) if routing_active else set()
+        )
+        destinations: list[str] = []
+        if not (had_z and routing_active):
+            destinations.append(album_id)
+        destinations.extend(sorted(matched_albums))
+        warning = (
+            "no_subject_match"
+            if (routing_active and had_z and not matched_albums)
+            else None
+        )
+        plans.append(
+            {"pid": pid, "photo": photo, "destinations": destinations, "warning": warning}
+        )
 
-            taken_at = int(photo.get("taken_at", 0))
-            for dest_id in destinations:
-                batch.put_item(
-                    Item={
-                        "pk": f"ALBUM#{dest_id}",
-                        "sk": f"PHOTO#{pid}",
-                        "taken_at": taken_at,
+    # Stage 2: pre-read existing memberships so writes are idempotent.
+    existing_pairs: set[tuple[str, str]] = set()
+    pair_keys = [
+        (dest, p["pid"]) for p in plans for dest in p["destinations"]
+    ]
+    for i in range(0, len(pair_keys), 100):
+        chunk = pair_keys[i : i + 100]
+        keys = [
+            {"pk": f"ALBUM#{dest}", "sk": f"PHOTO#{pid}"} for dest, pid in chunk
+        ]
+        request_items = {
+            MEMBERSHIPS_TABLE: {
+                "Keys": keys,
+                "ProjectionExpression": "pk, sk",
+            }
+        }
+        while request_items:
+            resp = dynamodb.batch_get_item(RequestItems=request_items)
+            for item in resp.get("Responses", {}).get(MEMBERSHIPS_TABLE, []):
+                dest_album = item["pk"].split("#", 1)[1]
+                dest_pid = item["sk"].split("#", 1)[1]
+                existing_pairs.add((dest_album, dest_pid))
+            request_items = resp.get("UnprocessedKeys") or {}
+
+    # Stage 3: write missing memberships only, build audit.
+    audit: list[dict] = []
+    landed_in_target_new: list[str] = []
+    with memberships_table.batch_writer() as batch:
+        for p in plans:
+            pid = p["pid"]
+            taken_at = int(p["photo"].get("taken_at", 0))
+            added_to_entries: list[dict] = []
+            for dest_id in p["destinations"]:
+                is_new = (dest_id, pid) not in existing_pairs
+                if is_new:
+                    batch.put_item(
+                        Item={
+                            "pk": f"ALBUM#{dest_id}",
+                            "sk": f"PHOTO#{pid}",
+                            "taken_at": taken_at,
+                        }
+                    )
+                    if dest_id == album_id:
+                        landed_in_target_new.append(pid)
+                added_to_entries.append(
+                    {
+                        "album_id": dest_id,
+                        "title": routing_album_titles.get(dest_id, ""),
+                        "newly_added": is_new,
                     }
                 )
-            if album_id in destinations:
-                landed_in_target.append(pid)
-
-            warning = None
-            if routing_active and had_z and not matched_albums:
-                warning = "no_subject_match"
-
             audit.append(
                 {
                     "photo_id": pid,
                     "basename": pid.rsplit("--", 1)[0] if "--" in pid else pid,
-                    "added_to": [
-                        {"album_id": dest_id, "title": routing_album_titles.get(dest_id, "")}
-                        for dest_id in destinations
-                    ],
-                    "warning": warning,
+                    "added_to": added_to_entries,
+                    "warning": p["warning"],
                 }
             )
 
-    added = len(landed_in_target)
+    added = len(landed_in_target_new)
 
     if added > 0 and not album.get("cover_photo_id"):
         cover_photo_id = max(
-            landed_in_target,
+            landed_in_target_new,
             key=lambda pid: int(photo_by_id[pid].get("taken_at", 0)),
         )
         albums_table.update_item(
@@ -1880,10 +1919,21 @@ async def download_public_photo(share_id: str, photo_id: str):
 class PresignFile(BaseModel):
     filename: str
     content_type: str
+    sha256: str | None = None
 
 
 class PresignRequest(BaseModel):
     files: list[PresignFile]
+
+
+def _lookup_photo_by_sha256(sha256: str) -> dict | None:
+    resp = photos_table.query(
+        IndexName="BySha256",
+        KeyConditionExpression=Key("sha256").eq(sha256),
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
 
 
 def _sanitize_photo_basename(filename: str) -> str:
@@ -1906,6 +1956,7 @@ async def presign_uploads(
     if not payload.files:
         raise HTTPException(status_code=400, detail="No files supplied")
     uploads = []
+    reused_count = 0
     for f in payload.files:
         ext = CONTENT_TYPE_TO_EXT.get(f.content_type)
         if not ext:
@@ -1913,6 +1964,19 @@ async def presign_uploads(
                 status_code=400,
                 detail=f"Unsupported content type: {f.content_type}",
             )
+
+        if f.sha256:
+            existing = _lookup_photo_by_sha256(f.sha256)
+            if existing:
+                uploads.append(
+                    {
+                        "photo_id": existing["photo_id"],
+                        "reused": True,
+                    }
+                )
+                reused_count += 1
+                continue
+
         photo_id = _generate_photo_id(f.filename)
         key = f"originals/{photo_id}.{ext}"
         url = s3_client.generate_presigned_url(
@@ -1924,9 +1988,17 @@ async def presign_uploads(
             },
             ExpiresIn=PRESIGN_PUT_TTL_SECONDS,
         )
-        uploads.append({"photo_id": photo_id, "key": key, "url": url})
+        uploads.append(
+            {"photo_id": photo_id, "key": key, "url": url, "reused": False}
+        )
     logger.info(
-        json.dumps({"event": "presign_issued", "count": len(uploads)})
+        json.dumps(
+            {
+                "event": "presign_issued",
+                "count": len(uploads),
+                "reused": reused_count,
+            }
+        )
     )
     return {"uploads": uploads}
 

@@ -284,6 +284,11 @@
       color: var(--accent);
       white-space: nowrap;
     }
+    .routing-chip.existing {
+      background: transparent;
+      border: 1px dashed rgba(34, 102, 221, 0.45);
+      color: rgba(34, 102, 221, 0.85);
+    }
     .routing-warn {
       font-size: 0.72rem;
       color: #b03030;
@@ -1263,6 +1268,10 @@
         for (const dest of dests) {
           const chip = document.createElement("span");
           chip.className = "routing-chip";
+          if (dest.newly_added === false) {
+            chip.classList.add("existing");
+            chip.title = "Photo was already in this album";
+          }
           chip.textContent = dest.title || "(untitled)";
           chips.appendChild(chip);
         }
