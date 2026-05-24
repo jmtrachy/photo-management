@@ -440,16 +440,20 @@ async def create_album(
 
 
 def _parse_match_token(photo_id: str) -> tuple[str, bool]:
-    """Per Story 11: basename → optional z_ strip → optional trailing _<digits> strip → lowercase."""
+    """Per Story 11: basename → optional z_ strip → drop the first `_<digits>` block AND anything after → lowercase.
+    If there's no `_<digits>` at all, keep the whole string."""
     basename = photo_id.rsplit("--", 1)[0] if "--" in photo_id else photo_id
     had_z = basename.startswith("z_")
     token = basename[2:] if had_z else basename
-    token = re.sub(r"_\d+$", "", token)
+    m = re.match(r"(.*?)_\d+", token)
+    if m:
+        token = m.group(1)
     return token.lower(), had_z
 
 
 def _build_routing_context(target_album_id: str) -> dict:
-    """Returns {"target_in_collections": bool, "subject_index": {token: {album_id, ...}}, "album_titles": {album_id: title}}.
+    """Returns {"target_in_collections": bool, "subject_index": {token: {album_id, ...}},
+    "album_titles": {album_id: title}, "unlisted_albums_by_id": {album_id: full_record}}.
     target_in_collections=False means no routing should happen (target album is not listed in any collection)."""
     resp = collection_albums_table.query(
         IndexName="ByAlbum",
@@ -465,6 +469,7 @@ def _build_routing_context(target_album_id: str) -> dict:
             "target_in_collections": False,
             "subject_index": {},
             "album_titles": {},
+            "unlisted_albums_by_id": {},
         }
 
     unlisted_album_ids: set[str] = set()
@@ -486,6 +491,7 @@ def _build_routing_context(target_album_id: str) -> dict:
         "target_in_collections": True,
         "subject_index": subject_index,
         "album_titles": album_titles,
+        "unlisted_albums_by_id": album_by_id,
     }
 
 
@@ -575,7 +581,7 @@ async def add_photos_to_album(
 
     # Stage 3: write missing memberships only, build audit.
     audit: list[dict] = []
-    landed_in_target_new: list[str] = []
+    landed_new_by_album: dict[str, list[str]] = {}
     with memberships_table.batch_writer() as batch:
         for p in plans:
             pid = p["pid"]
@@ -591,8 +597,7 @@ async def add_photos_to_album(
                             "taken_at": taken_at,
                         }
                     )
-                    if dest_id == album_id:
-                        landed_in_target_new.append(pid)
+                    landed_new_by_album.setdefault(dest_id, []).append(pid)
                 added_to_entries.append(
                     {
                         "album_id": dest_id,
@@ -609,15 +614,25 @@ async def add_photos_to_album(
                 }
             )
 
-    added = len(landed_in_target_new)
+    added = len(landed_new_by_album.get(album_id, []))
 
-    if added > 0 and not album.get("cover_photo_id"):
+    # Auto-pick a cover for each destination album that received new photos
+    # but didn't yet have a cover. Applies to the target album and any
+    # routed-to unlisted albums.
+    unlisted_by_id = routing.get("unlisted_albums_by_id", {})
+    for dest_id, new_pids in landed_new_by_album.items():
+        if dest_id == album_id:
+            dest_album = album
+        else:
+            dest_album = unlisted_by_id.get(dest_id)
+        if dest_album is None or dest_album.get("cover_photo_id"):
+            continue
         cover_photo_id = max(
-            landed_in_target_new,
+            new_pids,
             key=lambda pid: int(photo_by_id[pid].get("taken_at", 0)),
         )
         albums_table.update_item(
-            Key={"album_id": album_id},
+            Key={"album_id": dest_id},
             UpdateExpression="SET cover_photo_id = :cpid",
             ExpressionAttributeValues={":cpid": cover_photo_id},
         )
@@ -625,7 +640,7 @@ async def add_photos_to_album(
             json.dumps(
                 {
                     "event": "album_cover_initialized",
-                    "album_id": album_id,
+                    "album_id": dest_id,
                     "cover_photo_id": cover_photo_id,
                 }
             )
