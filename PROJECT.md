@@ -175,19 +175,21 @@ The motivating workflow: I shoot ~100 best photos per game (named `<athlete>_NN.
 For each uploaded file, derive a match token from its filename:
 1. Strip the extension (everything from the last `.` onward).
 2. If the result starts with `z_`, drop that prefix.
-3. If the result ends with `_<digits>` (one or more), drop that trailing portion. Single strip — not greedy.
+3. If the result contains a `_<digits>` block (one or more digits after an underscore), drop that block **and everything after it** — only the prefix remains. If there's no `_<digits>` at all, keep the whole string.
 4. Lowercase.
 
 The match token is compared (case-insensitively, equality) against every `subject` on every **unlisted** album in the Collections relevant to this upload (see Routing rules below for how scope is determined).
 
 Examples:
-* `lauren_01.jpg` → `lauren`
 * `lauren.jpg` → `lauren`
+* `lauren_01.jpg` → `lauren`
+* `lauren_02.jpg` → `lauren`
 * `z_lauren_01.jpg` → `lauren`
-* `z_lauren.jpg` → `lauren`
+* `lauren_01_alt.jpg` → `lauren`
+* `lauren_01_2026_25_23_2342343.jpg` → `lauren` (trailing timestamp/junk discarded)
+* `kenna_02_2026_25_23_2342343.jpg` → `kenna`
 * `lauren_jones_01.jpg` → `lauren_jones`
-* `lauren_alt.jpg` → `lauren_alt` (no trailing digits to strip)
-* `lauren_01_02.jpg` → `lauren_01` (single strip only)
+* `lauren_alt.jpg` → `lauren_alt` (no `_<digits>`, keep whole)
 
 Multi-subject filenames (e.g. `lauren_and_maya_01.jpg`) are out of scope for v1 — they parse to whatever the rule above produces (here, `lauren_and_maya`) and match only if a subject equals that exact string.
 
