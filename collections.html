@@ -21,7 +21,7 @@
       color: var(--fg);
       display: flex;
       flex-direction: column;
-      min-height: 100vh;
+      height: 100vh;
     }
     .top-header {
       flex: 0 0 auto;
@@ -90,6 +90,18 @@
       font-family: inherit;
     }
     .new-btn:hover { filter: brightness(1.1); }
+    .sidebar-filter {
+      width: 100%;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+    }
+    .sidebar-filter:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
     .status {
       color: var(--muted);
       font-size: 0.85rem;
@@ -245,6 +257,9 @@
         <a class="nav-link active" href="/collections">Collections</a>
       </nav>
       <div class="sidebar-section">
+        <input id="filter-input" class="sidebar-filter" type="search" placeholder="Filter collections…" autocomplete="off">
+      </div>
+      <div class="sidebar-section">
         <button id="new-collection-btn" class="new-btn" type="button">New collection</button>
       </div>
       <div id="status" class="status sidebar-section"></div>
@@ -305,10 +320,14 @@
       return card;
     }
 
-    function renderCollections(collections) {
+    const filterInput = document.getElementById("filter-input");
+    let allCollections = [];
+
+    function renderCollections(collections, filtering = false) {
       grid.innerHTML = "";
       loading.hidden = true;
       if (!collections.length) {
+        empty.textContent = filtering ? "No collections match that filter." : "No collections yet.";
         empty.hidden = false;
         grid.hidden = true;
         return;
@@ -316,6 +335,14 @@
       empty.hidden = true;
       grid.hidden = false;
       for (const c of collections) grid.appendChild(buildCollectionCard(c));
+    }
+
+    function applyFilter() {
+      const q = filterInput.value.trim().toLowerCase();
+      const filtered = q
+        ? allCollections.filter(c => (c.title || "").toLowerCase().includes(q))
+        : allCollections;
+      renderCollections(filtered, !!q);
     }
 
     async function fetchCollections() {
@@ -327,12 +354,15 @@
 
     async function refreshGrid() {
       try {
-        renderCollections(await fetchCollections());
+        allCollections = await fetchCollections();
+        applyFilter();
       } catch (err) {
         loading.textContent = `Failed to load collections: ${err.message}`;
         loading.hidden = false;
       }
     }
+
+    filterInput.addEventListener("input", applyFilter);
 
     refreshGrid();
 
