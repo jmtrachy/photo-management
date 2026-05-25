@@ -336,12 +336,21 @@
       title.className = "album-title";
       title.textContent = album.title;
       title.title = album.title;
+      const displayDate = album.event_date || album.created_at;
+      if (displayDate) {
+        const dateEl = document.createElement("div");
+        dateEl.className = "album-views";
+        dateEl.textContent = new Date(displayDate * 1000).toISOString().slice(0, 10);
+        meta.appendChild(title);
+        meta.appendChild(dateEl);
+      } else {
+        meta.appendChild(title);
+      }
       const stats = document.createElement("div");
       stats.className = "album-views";
       const views = pluralize(album.view_count ?? 0, "view");
       const downloads = pluralize(album.download_count ?? 0, "download");
       stats.textContent = `${views} · ${downloads}`;
-      meta.appendChild(title);
       meta.appendChild(stats);
       card.appendChild(meta);
 

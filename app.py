@@ -296,10 +296,15 @@ def _normalize_subjects(raw: list[str] | None) -> list[str]:
 class CreateAlbumRequest(BaseModel):
     title: str
     subjects: list[str] | None = None
+    event_date: int | None = None
 
 
 class SetSubjectsRequest(BaseModel):
     subjects: list[str]
+
+
+class SetEventDateRequest(BaseModel):
+    event_date: int | None = None
 
 
 @app.get("/api/albums")
@@ -321,6 +326,7 @@ async def list_albums(_email: str = Depends(require_admin)):
                 "view_count": int(item.get("view_count", 0)),
                 "download_count": int(item.get("download_count", 0)),
                 "created_at": int(item.get("created_at", 0)),
+                "event_date": item.get("event_date"),
                 "cover_photo_id": cover_photo_id,
                 "cover_thumb_url": cover_thumb_url,
             }
@@ -387,6 +393,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
         "view_count": int(item.get("view_count", 0)),
         "download_count": int(item.get("download_count", 0)),
         "created_at": int(item.get("created_at", 0)),
+        "event_date": item.get("event_date"),
         "cover_photo_id": cover_photo_id,
         "cover_thumb_url": cover_thumb_url,
         "subjects": list(item.get("subjects") or []),
@@ -420,6 +427,8 @@ async def create_album(
         "view_count": 0,
         "subjects": subjects,
     }
+    if payload.event_date is not None:
+        item["event_date"] = payload.event_date
     albums_table.put_item(Item=item)
     logger.info(
         json.dumps(
@@ -435,6 +444,7 @@ async def create_album(
         "album_id": album_id,
         "title": title,
         "created_at": now,
+        "event_date": item.get("event_date"),
         "subjects": subjects,
     }
 
@@ -742,6 +752,35 @@ class SetCoverRequest(BaseModel):
     photo_id: str
 
 
+class UpdateTitleRequest(BaseModel):
+    title: str
+
+
+@app.put("/api/albums/{album_id}/title")
+async def update_album_title(
+    album_id: str,
+    payload: UpdateTitleRequest,
+    _email: str = Depends(require_admin),
+):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(title) > ALBUM_TITLE_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Title exceeds {ALBUM_TITLE_MAX_LEN} characters",
+        )
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="SET title = :t, title_lower = :tl",
+        ExpressionAttributeValues={":t": title, ":tl": title.lower()},
+    )
+    return {"album_id": album_id, "title": title}
+
+
 @app.put("/api/albums/{album_id}/cover")
 async def set_album_cover(
     album_id: str,
@@ -802,6 +841,30 @@ async def set_album_subjects(
         )
     )
     return {"album_id": album_id, "subjects": subjects}
+
+
+@app.put("/api/albums/{album_id}/event-date")
+async def set_album_event_date(
+    album_id: str,
+    payload: SetEventDateRequest,
+    _email: str = Depends(require_admin),
+):
+    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    if payload.event_date is not None:
+        albums_table.update_item(
+            Key={"album_id": album_id},
+            UpdateExpression="SET event_date = :d",
+            ExpressionAttributeValues={":d": payload.event_date},
+        )
+    else:
+        albums_table.update_item(
+            Key={"album_id": album_id},
+            UpdateExpression="REMOVE event_date",
+        )
+    return {"album_id": album_id, "event_date": payload.event_date}
 
 
 @app.post("/api/albums/{album_id}/reset-counts")
@@ -987,6 +1050,7 @@ def _build_album_card(album: dict, share_id: str | None) -> dict:
         "album_id": album["album_id"],
         "title": album.get("title", ""),
         "created_at": int(album.get("created_at", 0)),
+        "event_date": album.get("event_date"),
         "cover_photo_id": cover_photo_id,
         "cover_thumb_url": cover_thumb_url,
         "share_id": share_id,
@@ -1043,8 +1107,8 @@ async def get_collection(
         else:
             listed_albums.append(card)
 
-    listed_albums.sort(key=lambda c: c["created_at"], reverse=True)
-    unlisted_albums.sort(key=lambda c: c["created_at"], reverse=True)
+    listed_albums.sort(key=lambda c: c["event_date"] or c["created_at"], reverse=True)
+    unlisted_albums.sort(key=lambda c: c["event_date"] or c["created_at"], reverse=True)
 
     return {
         "collection_id": collection_id,
@@ -1056,6 +1120,33 @@ async def get_collection(
         "listed_albums": listed_albums,
         "unlisted_albums": unlisted_albums,
     }
+
+
+@app.put("/api/collections/{collection_id}/title")
+async def update_collection_title(
+    collection_id: str,
+    payload: UpdateTitleRequest,
+    _email: str = Depends(require_admin),
+):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(title) > COLLECTION_TITLE_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Title exceeds {COLLECTION_TITLE_MAX_LEN} characters",
+        )
+    item = collections_table.get_item(
+        Key={"collection_id": collection_id}
+    ).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    collections_table.update_item(
+        Key={"collection_id": collection_id},
+        UpdateExpression="SET title = :t, title_lower = :tl",
+        ExpressionAttributeValues={":t": title, ":tl": title.lower()},
+    )
+    return {"collection_id": collection_id, "title": title}
 
 
 @app.delete("/api/collections/{collection_id}")
@@ -1536,7 +1627,7 @@ async def get_public_collection(share_id: str):
         card_share_id = _ensure_card_share_id(collection_id, m)
         cards.append(_build_album_card(album, card_share_id))
 
-    cards.sort(key=lambda c: c["created_at"], reverse=True)
+    cards.sort(key=lambda c: c["event_date"] or c["created_at"], reverse=True)
 
     return {
         "collection_id": collection_id,
@@ -1587,6 +1678,7 @@ async def get_public_album(share_id: str):
     return {
         "album_id": album_id,
         "title": item.get("title", ""),
+        "event_date": item.get("event_date"),
         "photos": photos,
     }
 

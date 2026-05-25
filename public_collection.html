@@ -128,10 +128,11 @@
       title.textContent = album.title || "(untitled)";
       title.title = album.title;
       meta.appendChild(title);
-      if (album.created_at) {
+      const displayDate = album.event_date || album.created_at;
+      if (displayDate) {
         const date = document.createElement("div");
         date.className = "album-date";
-        date.textContent = new Date(album.created_at * 1000).toISOString().slice(0, 10);
+        date.textContent = new Date(displayDate * 1000).toISOString().slice(0, 10);
         meta.appendChild(date);
       }
       card.appendChild(meta);
