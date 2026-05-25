@@ -157,7 +157,12 @@
 
         titleEl.textContent = data.title || "Untitled album";
         document.title = data.title || "Album";
-        metaEl.textContent = pluralize(data.photos.length, "photo");
+        const parts = [];
+        if (data.event_date) {
+          parts.push(new Date(data.event_date * 1000).toISOString().slice(0, 10));
+        }
+        parts.push(pluralize(data.photos.length, "photo"));
+        metaEl.textContent = parts.join(" · ");
 
         loading.hidden = true;
         grid.innerHTML = "";

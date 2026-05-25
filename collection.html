@@ -176,7 +176,26 @@
       margin: 0;
       font-size: 1.25rem;
       font-weight: 600;
+      cursor: pointer;
     }
+    .page-header h2:hover {
+      text-decoration: underline;
+      text-decoration-style: dashed;
+      text-underline-offset: 4px;
+      text-decoration-color: var(--muted);
+    }
+    .title-edit-input {
+      font-size: 1.25rem;
+      font-weight: 600;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      padding: 0.1rem 0.3rem;
+      font-family: inherit;
+      width: auto;
+      min-width: 200px;
+      display: none;
+    }
+    .title-edit-input:focus { outline: none; }
     .breadcrumb {
       color: var(--muted);
       font-size: 0.9rem;
@@ -506,6 +525,7 @@
         <a class="breadcrumb" href="/collections">Collections</a>
         <span class="breadcrumb">›</span>
         <h2 id="collection-title">…</h2>
+        <input id="collection-title-input" class="title-edit-input" type="text" maxlength="200">
       </div>
       <div id="public-url" class="public-url" hidden>
         <span>Public link:</span>
@@ -559,7 +579,52 @@
   <script>
     const collectionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const titleEl = document.getElementById("collection-title");
+    const titleInput = document.getElementById("collection-title-input");
     const publicUrlEl = document.getElementById("public-url");
+
+    let titleEditCancelled = false;
+
+    function startEditTitle() {
+      titleInput.value = titleEl.textContent;
+      titleEl.style.display = "none";
+      titleInput.style.display = "inline-block";
+      titleInput.focus();
+      titleInput.select();
+    }
+    async function saveTitle() {
+      const newTitle = titleInput.value.trim();
+      titleInput.style.display = "none";
+      titleEl.style.display = "";
+      if (!newTitle || newTitle === titleEl.textContent) return;
+      try {
+        const resp = await fetch(`/api/collections/${encodeURIComponent(collectionId)}/title`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({title: newTitle}),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        titleEl.textContent = data.title;
+        document.title = `Collection · ${data.title}`;
+      } catch (err) {
+        statusEl.textContent = `Rename failed: ${err.message}`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    }
+    function cancelEditTitle() {
+      titleEditCancelled = true;
+      titleInput.style.display = "none";
+      titleEl.style.display = "";
+    }
+    titleEl.addEventListener("click", startEditTitle);
+    titleInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); saveTitle(); }
+      else if (e.key === "Escape") cancelEditTitle();
+    });
+    titleInput.addEventListener("blur", () => {
+      if (titleEditCancelled) { titleEditCancelled = false; return; }
+      saveTitle();
+    });
     const publicUrlLink = document.getElementById("public-url-link");
     const copyUrlBtn = document.getElementById("copy-url-btn");
     const sectionsEl = document.getElementById("sections");
@@ -674,10 +739,11 @@
       title.textContent = album.title || "(untitled)";
       title.title = album.title;
       meta.appendChild(title);
-      if (album.created_at) {
+      const displayDate = album.event_date || album.created_at;
+      if (displayDate) {
         const date = document.createElement("div");
         date.className = "album-meta-date";
-        date.textContent = new Date(album.created_at * 1000).toISOString().slice(0, 10);
+        date.textContent = new Date(displayDate * 1000).toISOString().slice(0, 10);
         meta.appendChild(date);
       }
       link.appendChild(meta);

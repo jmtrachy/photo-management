@@ -92,7 +92,26 @@
       font-size: 1.4rem;
       font-weight: 600;
       letter-spacing: -0.01em;
+      cursor: pointer;
     }
+    .album-title-bar h2:hover {
+      text-decoration: underline;
+      text-decoration-style: dashed;
+      text-underline-offset: 4px;
+      text-decoration-color: var(--muted);
+    }
+    .title-edit-input {
+      font-size: 1.4rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      padding: 0.1rem 0.3rem;
+      font-family: inherit;
+      width: 100%;
+      display: none;
+    }
+    .title-edit-input:focus { outline: none; }
     .album-stats {
       font-size: 0.85rem;
       color: var(--muted);
@@ -820,6 +839,10 @@
         <input id="subject-input" class="subject-input" type="text" maxlength="64" placeholder="Add a subject…" autocomplete="off">
       </div>
       <div class="sidebar-section">
+        <div class="sidebar-label">Event date</div>
+        <input id="event-date-input" class="sidebar-filter" type="date">
+      </div>
+      <div class="sidebar-section">
         <div class="sidebar-label">Stats</div>
         <div id="album-meta" class="album-stats"></div>
       </div>
@@ -828,6 +851,7 @@
     <main>
       <div class="album-title-bar">
         <h2 id="album-title">…</h2>
+        <input id="album-title-input" class="title-edit-input" type="text" maxlength="200">
       </div>
       <div id="loading" class="loading">Loading…</div>
       <div id="empty" class="empty" hidden>No photos in this album yet.</div>
@@ -842,7 +866,52 @@
   <script>
     const albumId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const titleEl = document.getElementById("album-title");
+    const titleInput = document.getElementById("album-title-input");
     const metaEl = document.getElementById("album-meta");
+
+    let titleEditCancelled = false;
+
+    function startEditTitle() {
+      titleInput.value = titleEl.textContent;
+      titleEl.style.display = "none";
+      titleInput.style.display = "block";
+      titleInput.focus();
+      titleInput.select();
+    }
+    async function saveTitle() {
+      const newTitle = titleInput.value.trim();
+      titleInput.style.display = "none";
+      titleEl.style.display = "";
+      if (!newTitle || newTitle === titleEl.textContent) return;
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/title`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({title: newTitle}),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        titleEl.textContent = data.title;
+        document.title = `${data.title} — Album`;
+      } catch (err) {
+        statusEl.textContent = `Rename failed: ${err.message}`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    }
+    function cancelEditTitle() {
+      titleEditCancelled = true;
+      titleInput.style.display = "none";
+      titleEl.style.display = "";
+    }
+    titleEl.addEventListener("click", startEditTitle);
+    titleInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); saveTitle(); }
+      else if (e.key === "Escape") cancelEditTitle();
+    });
+    titleInput.addEventListener("blur", () => {
+      if (titleEditCancelled) { titleEditCancelled = false; return; }
+      saveTitle();
+    });
     const grid = document.getElementById("grid");
     const empty = document.getElementById("empty");
     const loading = document.getElementById("loading");
@@ -858,6 +927,22 @@
     const chipListEl = document.getElementById("chip-list");
     const subjectInput = document.getElementById("subject-input");
     let currentSubjects = [];
+    const eventDateInput = document.getElementById("event-date-input");
+    eventDateInput.addEventListener("change", async () => {
+      const val = eventDateInput.value;
+      const epoch = val ? Math.floor(new Date(val + "T12:00:00").getTime() / 1000) : null;
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/event-date`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({event_date: epoch}),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      } catch (err) {
+        statusEl.textContent = `Failed to save event date: ${err.message}`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    });
     const resetBackdrop = document.getElementById("reset-modal-backdrop");
     const resetYesBtn = document.getElementById("reset-yes-btn");
     const resetNoBtn = document.getElementById("reset-no-btn");
@@ -1335,6 +1420,12 @@
         currentCoverPhotoId = data.cover_photo_id || null;
         currentSubjects = data.subjects || [];
         renderChips();
+        if (data.event_date) {
+          const d = new Date(data.event_date * 1000);
+          eventDateInput.value = d.toISOString().slice(0, 10);
+        } else {
+          eventDateInput.value = "";
+        }
         renderMeta(data);
 
         loading.hidden = true;
