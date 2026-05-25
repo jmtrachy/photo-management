@@ -149,6 +149,67 @@
       font-size: 0.85rem;
       min-height: 1em;
     }
+    .modal-filter {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      font-size: 0.95rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      margin-bottom: 0.75rem;
+    }
+    .modal-filter:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .album-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      overflow-y: auto;
+      max-height: 50vh;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .album-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .album-row:last-child { border-bottom: none; }
+    .album-row:hover { background: var(--bg); }
+    .album-row-cover {
+      width: 40px;
+      height: 40px;
+      border-radius: 4px;
+      background: #ececec;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .album-row-cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .album-row-meta { flex: 1; min-width: 0; }
+    .album-row-title {
+      font-size: 0.9rem;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .modal-loading, .modal-empty {
+      padding: 1.5rem 0.5rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .modal-empty { font-style: italic; }
     .modal-actions {
       margin-top: 1.25rem;
       display: flex;
@@ -708,6 +769,20 @@
     </div>
   </div>
 
+  <div id="album-picker-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="album-picker-title">
+    <div class="modal">
+      <h2 id="album-picker-title">Add to album</h2>
+      <input id="album-picker-filter" class="modal-filter" type="search" placeholder="Filter by title…" autocomplete="off">
+      <div id="album-picker-loading" class="modal-loading">Loading…</div>
+      <div id="album-picker-empty" class="modal-empty" hidden>No other albums found.</div>
+      <ul id="album-picker-list" class="album-list" hidden></ul>
+      <div id="album-picker-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="album-picker-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="layout">
     <aside class="sidebar">
       <nav class="sidebar-section">
@@ -724,6 +799,7 @@
         <div id="select-mode-bar" class="select-mode">
           <span class="select-count"><strong id="select-count">0</strong> selected</span>
           <button id="set-cover-btn" class="upload-btn" type="button" disabled>Set as cover</button>
+          <button id="add-to-album-btn" class="upload-btn" type="button" disabled>Add to album</button>
           <button id="remove-btn" class="danger-btn" type="button" disabled>Remove</button>
           <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
         </div>
@@ -900,6 +976,7 @@
       if (e.key !== "Escape") return;
       if (resetBackdrop.classList.contains("visible")) closeResetModal();
       else if (removeBackdrop.classList.contains("visible")) closeRemoveModal();
+      else if (albumPickerBackdrop.classList.contains("visible")) closeAlbumPicker();
       else if (routingBackdrop.classList.contains("visible")) closeResultsModal();
       else if (selectionMode) exitSelectionMode();
     });
@@ -956,8 +1033,18 @@
     let currentCoverPhotoId = null;
 
     const setCoverBtn = document.getElementById("set-cover-btn");
+    const addToAlbumBtn = document.getElementById("add-to-album-btn");
     const removeBtn = document.getElementById("remove-btn");
     const cancelSelectBtn = document.getElementById("cancel-select-btn");
+
+    const albumPickerBackdrop = document.getElementById("album-picker-backdrop");
+    const albumPickerFilter = document.getElementById("album-picker-filter");
+    const albumPickerLoading = document.getElementById("album-picker-loading");
+    const albumPickerEmpty = document.getElementById("album-picker-empty");
+    const albumPickerList = document.getElementById("album-picker-list");
+    const albumPickerError = document.getElementById("album-picker-error");
+    const albumPickerCancel = document.getElementById("album-picker-cancel");
+    let pickerAlbums = [];
     const selectCountEl = document.getElementById("select-count");
     const removeBackdrop = document.getElementById("remove-modal-backdrop");
     const removeYesBtn = document.getElementById("remove-yes-btn");
@@ -973,6 +1060,7 @@
       }
       selectCountEl.textContent = String(selectedIds.size);
       setCoverBtn.disabled = selectedIds.size !== 1;
+      addToAlbumBtn.disabled = selectedIds.size === 0;
       removeBtn.disabled = selectedIds.size === 0;
     }
     function enterSelectionMode() {
@@ -991,6 +1079,113 @@
       updateSelectionUI();
     }
     cancelSelectBtn.addEventListener("click", exitSelectionMode);
+
+    function renderAlbumPicker() {
+      const q = albumPickerFilter.value.trim().toLowerCase();
+      albumPickerList.innerHTML = "";
+      const visible = pickerAlbums.filter(a =>
+        !q || (a.title || "").toLowerCase().includes(q)
+      );
+      if (!visible.length) {
+        albumPickerList.hidden = true;
+        albumPickerEmpty.hidden = false;
+        return;
+      }
+      albumPickerEmpty.hidden = true;
+      albumPickerList.hidden = false;
+      for (const a of visible) {
+        const li = document.createElement("li");
+        li.className = "album-row";
+        const cover = document.createElement("div");
+        cover.className = "album-row-cover";
+        if (a.cover_thumb_url) {
+          const img = document.createElement("img");
+          img.src = a.cover_thumb_url;
+          img.alt = "";
+          img.loading = "lazy";
+          cover.appendChild(img);
+        }
+        const meta = document.createElement("div");
+        meta.className = "album-row-meta";
+        const title = document.createElement("div");
+        title.className = "album-row-title";
+        title.textContent = a.title;
+        title.title = a.title;
+        meta.appendChild(title);
+        li.appendChild(cover);
+        li.appendChild(meta);
+        li.addEventListener("click", () => addSelectedToAlbum(a));
+        albumPickerList.appendChild(li);
+      }
+    }
+
+    async function openAlbumPicker() {
+      if (selectedIds.size === 0) return;
+      albumPickerFilter.value = "";
+      albumPickerBackdrop.classList.add("visible");
+      albumPickerLoading.hidden = false;
+      albumPickerEmpty.hidden = true;
+      albumPickerList.hidden = true;
+      albumPickerList.innerHTML = "";
+      albumPickerError.textContent = "";
+      try {
+        const resp = await fetch("/api/albums");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        pickerAlbums = (data.albums || []).filter(a => a.album_id !== albumId);
+        albumPickerLoading.hidden = true;
+        renderAlbumPicker();
+        albumPickerFilter.focus();
+      } catch (err) {
+        albumPickerLoading.hidden = true;
+        albumPickerError.textContent = `Failed to load albums: ${err.message}`;
+      }
+    }
+
+    function closeAlbumPicker() {
+      albumPickerBackdrop.classList.remove("visible");
+    }
+
+    async function addSelectedToAlbum(destAlbum) {
+      const ids = Array.from(selectedIds);
+      if (!ids.length) return;
+      albumPickerList.style.pointerEvents = "none";
+      albumPickerError.textContent = "";
+      try {
+        const resp = await fetch(
+          `/api/albums/${encodeURIComponent(destAlbum.album_id)}/photos`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ photo_ids: ids }),
+          }
+        );
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        closeAlbumPicker();
+        exitSelectionMode();
+        statusEl.textContent = `Added ${pluralize(data.added, "photo")} to "${destAlbum.title}".`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      } catch (err) {
+        albumPickerError.textContent = err.message;
+      } finally {
+        albumPickerList.style.pointerEvents = "";
+      }
+    }
+
+    addToAlbumBtn.addEventListener("click", openAlbumPicker);
+    albumPickerCancel.addEventListener("click", closeAlbumPicker);
+    albumPickerBackdrop.addEventListener("click", (e) => {
+      if (e.target === albumPickerBackdrop) closeAlbumPicker();
+    });
+    albumPickerFilter.addEventListener("input", renderAlbumPicker);
 
     async function setAsCover() {
       if (selectedIds.size !== 1) return;
