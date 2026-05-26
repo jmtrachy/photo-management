@@ -13,7 +13,6 @@ import zipfile
 from pathlib import Path
 
 import boto3
-from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -21,17 +20,18 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
 
+from data import albums as album_store
+from data import collection_albums as ca_store
+from data import collections as collection_store
+from data import memberships as membership_store
+from data import photos as photo_store
+from data import shares as share_store
+from data import tokens as token_store
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
-LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
-PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
-ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
-MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
-SHARES_TABLE = os.environ["SHARES_TABLE"]
-COLLECTIONS_TABLE = os.environ["COLLECTIONS_TABLE"]
-COLLECTION_ALBUMS_TABLE = os.environ["COLLECTION_ALBUMS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
@@ -60,14 +60,6 @@ ssm = boto3.client("ssm")
 ses = boto3.client("ses")
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
-dynamodb = boto3.resource("dynamodb")
-tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
-photos_table = dynamodb.Table(PHOTOS_TABLE)
-albums_table = dynamodb.Table(ALBUMS_TABLE)
-memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
-shares_table = dynamodb.Table(SHARES_TABLE)
-collections_table = dynamodb.Table(COLLECTIONS_TABLE)
-collection_albums_table = dynamodb.Table(COLLECTION_ALBUMS_TABLE)
 
 ALBUM_TITLE_MAX_LEN = 200
 ADD_TO_ALBUM_MAX = 100
@@ -136,23 +128,11 @@ def generate_token() -> str:
 
 
 def store_token(token: str, email: str) -> None:
-    tokens_table.put_item(
-        Item={
-            "token": token,
-            "email": email,
-            "expires_at": int(time.time()) + TOKEN_TTL_SECONDS,
-        }
-    )
+    token_store.store(token, email, TOKEN_TTL_SECONDS)
 
 
 def consume_token(token: str) -> str | None:
-    item = tokens_table.get_item(Key={"token": token}).get("Item")
-    if not item:
-        return None
-    if int(item["expires_at"]) < int(time.time()):
-        return None
-    tokens_table.delete_item(Key={"token": token})
-    return item["email"]
+    return token_store.consume(token)
 
 
 def send_magic_link(to_email: str, link: str) -> None:
@@ -309,14 +289,9 @@ class SetEventDateRequest(BaseModel):
 
 @app.get("/api/albums")
 async def list_albums(_email: str = Depends(require_admin)):
-    resp = albums_table.query(
-        IndexName="ByCreatedAt",
-        KeyConditionExpression=Key("entity_type").eq("ALBUM"),
-        ScanIndexForward=False,
-        Limit=ALBUM_PAGE_LIMIT,
-    )
+    items = album_store.list_by_created_at(ALBUM_PAGE_LIMIT)
     albums = []
-    for item in resp.get("Items", []):
+    for item in items:
         cover_photo_id = item.get("cover_photo_id")
         cover_thumb_url = _derivative_url(cover_photo_id, "thumb") if cover_photo_id else None
         albums.append(
@@ -336,36 +311,12 @@ async def list_albums(_email: str = Depends(require_admin)):
 
 @app.get("/api/albums/{album_id}")
 async def get_album(album_id: str, _email: str = Depends(require_admin)):
-    item = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    item = album_store.get(album_id)
     if not item:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    memberships: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"KeyConditionExpression": Key("pk").eq(f"ALBUM#{album_id}")}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = memberships_table.query(**kw)
-        memberships.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-
-    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
-    photo_ids = [m["sk"].split("#", 1)[1] for m in memberships]
-
-    photo_by_id: dict = {}
-    for i in range(0, len(photo_ids), 100):
-        chunk = photo_ids[i : i + 100]
-        request_items: dict = {
-            PHOTOS_TABLE: {"Keys": [{"photo_id": pid} for pid in chunk]}
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
-                photo_by_id[p["photo_id"]] = p
-            request_items = resp.get("UnprocessedKeys") or {}
+    photo_ids = membership_store.get_photo_ids_in_order(album_id)
+    photo_by_id = photo_store.batch_get(photo_ids)
 
     photos = []
     for pid in photo_ids:
@@ -429,7 +380,7 @@ async def create_album(
     }
     if payload.event_date is not None:
         item["event_date"] = payload.event_date
-    albums_table.put_item(Item=item)
+    album_store.create(item)
     logger.info(
         json.dumps(
             {
@@ -465,13 +416,10 @@ def _build_routing_context(target_album_id: str) -> dict:
     """Returns {"target_in_collections": bool, "subject_index": {token: {album_id, ...}},
     "album_titles": {album_id: title}, "unlisted_albums_by_id": {album_id: full_record}}.
     target_in_collections=False means no routing should happen (target album is not listed in any collection)."""
-    resp = collection_albums_table.query(
-        IndexName="ByAlbum",
-        KeyConditionExpression=Key("sk").eq(f"ALBUM#{target_album_id}"),
-    )
+    rows = ca_store.get_collections_for_album(target_album_id)
     listed_collection_ids = [
         r["pk"].split("#", 1)[1]
-        for r in resp.get("Items", [])
+        for r in rows
         if r.get("visibility", "listed") == "listed"
     ]
     if not listed_collection_ids:
@@ -484,11 +432,11 @@ def _build_routing_context(target_album_id: str) -> dict:
 
     unlisted_album_ids: set[str] = set()
     for cid in listed_collection_ids:
-        for m in _collection_album_memberships(cid):
+        for m in ca_store.get_memberships(cid):
             if m.get("visibility", "listed") == "unlisted":
                 unlisted_album_ids.add(m["sk"].split("#", 1)[1])
 
-    album_by_id = _batch_get_albums(list(unlisted_album_ids))
+    album_by_id = album_store.batch_get(list(unlisted_album_ids))
 
     subject_index: dict[str, set[str]] = {}
     album_titles: dict[str, str] = {}
@@ -523,18 +471,11 @@ async def add_photos_to_album(
             detail=f"Cannot add more than {ADD_TO_ALBUM_MAX} photos at once",
         )
 
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    keys = [{"photo_id": pid} for pid in payload.photo_ids]
-    photo_items: list[dict] = []
-    request_items: dict = {PHOTOS_TABLE: {"Keys": keys}}
-    while request_items:
-        resp = dynamodb.batch_get_item(RequestItems=request_items)
-        photo_items.extend(resp.get("Responses", {}).get(PHOTOS_TABLE, []))
-        request_items = resp.get("UnprocessedKeys") or {}
-    photo_by_id = {p["photo_id"]: p for p in photo_items}
+    photo_by_id = photo_store.batch_get(payload.photo_ids)
 
     routing = _build_routing_context(album_id)
     routing_active = routing["target_in_collections"]
@@ -566,48 +507,26 @@ async def add_photos_to_album(
         )
 
     # Stage 2: pre-read existing memberships so writes are idempotent.
-    existing_pairs: set[tuple[str, str]] = set()
     pair_keys = [
         (dest, p["pid"]) for p in plans for dest in p["destinations"]
     ]
-    for i in range(0, len(pair_keys), 100):
-        chunk = pair_keys[i : i + 100]
-        keys = [
-            {"pk": f"ALBUM#{dest}", "sk": f"PHOTO#{pid}"} for dest, pid in chunk
-        ]
-        request_items = {
-            MEMBERSHIPS_TABLE: {
-                "Keys": keys,
-                "ProjectionExpression": "pk, sk",
-            }
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for item in resp.get("Responses", {}).get(MEMBERSHIPS_TABLE, []):
-                dest_album = item["pk"].split("#", 1)[1]
-                dest_pid = item["sk"].split("#", 1)[1]
-                existing_pairs.add((dest_album, dest_pid))
-            request_items = resp.get("UnprocessedKeys") or {}
+    existing_pairs = membership_store.check_existing_pairs(pair_keys)
 
     # Stage 3: write missing memberships only, build audit.
     audit: list[dict] = []
     landed_new_by_album: dict[str, list[str]] = {}
-    with memberships_table.batch_writer() as batch:
-        for p in plans:
-            pid = p["pid"]
-            taken_at = int(p["photo"].get("taken_at", 0))
-            added_to_entries: list[dict] = []
-            for dest_id in p["destinations"]:
-                is_new = (dest_id, pid) not in existing_pairs
-                if is_new:
-                    batch.put_item(
-                        Item={
-                            "pk": f"ALBUM#{dest_id}",
-                            "sk": f"PHOTO#{pid}",
-                            "taken_at": taken_at,
-                        }
-                    )
-                    landed_new_by_album.setdefault(dest_id, []).append(pid)
+    new_entries: list[dict] = []
+    for p in plans:
+        pid = p["pid"]
+        taken_at = int(p["photo"].get("taken_at", 0))
+        added_to_entries: list[dict] = []
+        for dest_id in p["destinations"]:
+            is_new = (dest_id, pid) not in existing_pairs
+            if is_new:
+                new_entries.append(
+                    {"album_id": dest_id, "photo_id": pid, "taken_at": taken_at}
+                )
+                landed_new_by_album.setdefault(dest_id, []).append(pid)
                 added_to_entries.append(
                     {
                         "album_id": dest_id,
@@ -623,6 +542,9 @@ async def add_photos_to_album(
                     "warning": p["warning"],
                 }
             )
+
+    if new_entries:
+        membership_store.batch_add(new_entries)
 
     added = len(landed_new_by_album.get(album_id, []))
 
@@ -641,11 +563,7 @@ async def add_photos_to_album(
             new_pids,
             key=lambda pid: int(photo_by_id[pid].get("taken_at", 0)),
         )
-        albums_table.update_item(
-            Key={"album_id": dest_id},
-            UpdateExpression="SET cover_photo_id = :cpid",
-            ExpressionAttributeValues={":cpid": cover_photo_id},
-        )
+        album_store.set_cover_photo(dest_id, cover_photo_id)
         logger.info(
             json.dumps(
                 {
@@ -694,33 +612,23 @@ async def remove_photos_from_album(
             detail=f"Cannot remove more than {ADD_TO_ALBUM_MAX} photos at once",
         )
 
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
     removed_set = set(payload.photo_ids)
-    removed = 0
-    with memberships_table.batch_writer() as batch:
-        for pid in removed_set:
-            batch.delete_item(Key={"pk": f"ALBUM#{album_id}", "sk": f"PHOTO#{pid}"})
-            removed += 1
+    membership_store.batch_remove(album_id, list(removed_set))
+    removed = len(removed_set)
 
     new_cover_photo_id = album.get("cover_photo_id")
     if new_cover_photo_id in removed_set:
-        remaining_photo_ids = _album_photo_ids_in_order(album_id)
+        remaining_photo_ids = membership_store.get_photo_ids_in_order(album_id)
         if remaining_photo_ids:
             new_cover_photo_id = remaining_photo_ids[0]
-            albums_table.update_item(
-                Key={"album_id": album_id},
-                UpdateExpression="SET cover_photo_id = :cpid",
-                ExpressionAttributeValues={":cpid": new_cover_photo_id},
-            )
+            album_store.set_cover_photo(album_id, new_cover_photo_id)
         else:
             new_cover_photo_id = None
-            albums_table.update_item(
-                Key={"album_id": album_id},
-                UpdateExpression="REMOVE cover_photo_id",
-            )
+            album_store.remove_cover_photo(album_id)
         logger.info(
             json.dumps(
                 {
@@ -770,14 +678,10 @@ async def update_album_title(
             status_code=400,
             detail=f"Title exceeds {ALBUM_TITLE_MAX_LEN} characters",
         )
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="SET title = :t, title_lower = :tl",
-        ExpressionAttributeValues={":t": title, ":tl": title.lower()},
-    )
+    album_store.set_title(album_id, title)
     return {"album_id": album_id, "title": title}
 
 
@@ -787,21 +691,14 @@ async def set_album_cover(
     payload: SetCoverRequest,
     _email: str = Depends(require_admin),
 ):
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    membership = memberships_table.get_item(
-        Key={"pk": f"ALBUM#{album_id}", "sk": f"PHOTO#{payload.photo_id}"}
-    ).get("Item")
-    if not membership:
+    if not membership_store.is_photo_in_album(album_id, payload.photo_id):
         raise HTTPException(status_code=400, detail="Photo is not in this album")
 
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="SET cover_photo_id = :cpid",
-        ExpressionAttributeValues={":cpid": payload.photo_id},
-    )
+    album_store.set_cover_photo(album_id, payload.photo_id)
     logger.info(
         json.dumps(
             {
@@ -820,17 +717,13 @@ async def set_album_subjects(
     payload: SetSubjectsRequest,
     _email: str = Depends(require_admin),
 ):
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
     subjects = _normalize_subjects(payload.subjects)
 
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="SET subjects = :s",
-        ExpressionAttributeValues={":s": subjects},
-    )
+    album_store.set_subjects(album_id, subjects)
     logger.info(
         json.dumps(
             {
@@ -849,44 +742,29 @@ async def set_album_event_date(
     payload: SetEventDateRequest,
     _email: str = Depends(require_admin),
 ):
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
     if payload.event_date is not None:
-        albums_table.update_item(
-            Key={"album_id": album_id},
-            UpdateExpression="SET event_date = :d",
-            ExpressionAttributeValues={":d": payload.event_date},
-        )
+        album_store.set_event_date(album_id, payload.event_date)
     else:
-        albums_table.update_item(
-            Key={"album_id": album_id},
-            UpdateExpression="REMOVE event_date",
-        )
+        album_store.remove_event_date(album_id)
     return {"album_id": album_id, "event_date": payload.event_date}
 
 
 @app.post("/api/albums/{album_id}/reset-counts")
 async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)):
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo_ids = _album_photo_ids_in_order(album_id)
+    photo_ids = membership_store.get_photo_ids_in_order(album_id)
 
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="SET view_count = :zero, download_count = :zero",
-        ExpressionAttributeValues={":zero": 0},
-    )
+    album_store.reset_counts(album_id)
 
     for pid in photo_ids:
-        photos_table.update_item(
-            Key={"photo_id": pid},
-            UpdateExpression="SET view_count = :zero, download_count = :zero",
-            ExpressionAttributeValues={":zero": 0},
-        )
+        photo_store.reset_counts(pid)
 
     logger.info(
         json.dumps(
@@ -938,7 +816,7 @@ async def create_collection(
         "view_count": 0,
         "share_id": share_id,
     }
-    collections_table.put_item(Item=item)
+    collection_store.create(item)
     logger.info(
         json.dumps(
             {
@@ -966,48 +844,14 @@ def _ensure_collection_share_id(item: dict) -> str:
         return share_id
     collection_id = item["collection_id"]
     share_id = _mint_collection_share(collection_id)
-    collections_table.update_item(
-        Key={"collection_id": collection_id},
-        UpdateExpression="SET share_id = :s",
-        ExpressionAttributeValues={":s": share_id},
-    )
+    collection_store.set_share_id(collection_id, share_id)
     item["share_id"] = share_id
     return share_id
 
 
-def _collection_album_memberships(collection_id: str) -> list[dict]:
-    rows: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {
-            "KeyConditionExpression": Key("pk").eq(f"COLLECTION#{collection_id}")
-        }
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = collection_albums_table.query(**kw)
-        rows.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-    return rows
-
-
-def _collection_album_ids(collection_id: str) -> list[str]:
-    return [
-        r["sk"].split("#", 1)[1]
-        for r in _collection_album_memberships(collection_id)
-    ]
-
-
 @app.get("/api/collections")
 async def list_collections(_email: str = Depends(require_admin)):
-    resp = collections_table.query(
-        IndexName="ByCreatedAt",
-        KeyConditionExpression=Key("entity_type").eq("COLLECTION"),
-        ScanIndexForward=False,
-        Limit=COLLECTION_PAGE_LIMIT,
-    )
-    items = resp.get("Items", [])
+    items = collection_store.list_by_created_at(COLLECTION_PAGE_LIMIT)
 
     collections = []
     for it in items:
@@ -1018,7 +862,7 @@ async def list_collections(_email: str = Depends(require_admin)):
                 "title": it.get("title", ""),
                 "created_at": int(it.get("created_at", 0)),
                 "view_count": int(it.get("view_count", 0)),
-                "album_count": len(_collection_album_ids(it["collection_id"])),
+                "album_count": len(ca_store.get_album_ids(it["collection_id"])),
                 "share_id": share_id,
                 "public_url": collection_public_url(share_id),
             }
@@ -1032,11 +876,7 @@ def _ensure_card_share_id(collection_id: str, membership: dict) -> str:
         return share_id
     album_id = membership["sk"].split("#", 1)[1]
     share_id = _ensure_album_share(album_id)
-    collection_albums_table.update_item(
-        Key={"pk": f"COLLECTION#{collection_id}", "sk": membership["sk"]},
-        UpdateExpression="SET share_id = :s",
-        ExpressionAttributeValues={":s": share_id},
-    )
+    ca_store.set_share_id(collection_id, membership["sk"], share_id)
     membership["share_id"] = share_id
     return share_id
 
@@ -1058,36 +898,19 @@ def _build_album_card(album: dict, share_id: str | None) -> dict:
     }
 
 
-def _batch_get_albums(album_ids: list[str]) -> dict:
-    album_by_id: dict = {}
-    for i in range(0, len(album_ids), 100):
-        chunk = album_ids[i : i + 100]
-        request_items: dict = {
-            ALBUMS_TABLE: {"Keys": [{"album_id": aid} for aid in chunk]}
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for a in resp.get("Responses", {}).get(ALBUMS_TABLE, []):
-                album_by_id[a["album_id"]] = a
-            request_items = resp.get("UnprocessedKeys") or {}
-    return album_by_id
-
-
 @app.get("/api/collections/{collection_id}")
 async def get_collection(
     collection_id: str, _email: str = Depends(require_admin)
 ):
-    item = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    item = collection_store.get(collection_id)
     if not item:
         raise HTTPException(status_code=404, detail="Collection not found")
 
     share_id = _ensure_collection_share_id(item)
 
-    memberships = _collection_album_memberships(collection_id)
+    memberships = ca_store.get_memberships(collection_id)
     album_ids = [m["sk"].split("#", 1)[1] for m in memberships]
-    album_by_id = _batch_get_albums(album_ids)
+    album_by_id = album_store.batch_get(album_ids)
 
     listed_albums: list[dict] = []
     unlisted_albums: list[dict] = []
@@ -1136,16 +959,10 @@ async def update_collection_title(
             status_code=400,
             detail=f"Title exceeds {COLLECTION_TITLE_MAX_LEN} characters",
         )
-    item = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    item = collection_store.get(collection_id)
     if not item:
         raise HTTPException(status_code=404, detail="Collection not found")
-    collections_table.update_item(
-        Key={"collection_id": collection_id},
-        UpdateExpression="SET title = :t, title_lower = :tl",
-        ExpressionAttributeValues={":t": title, ":tl": title.lower()},
-    )
+    collection_store.set_title(collection_id, title)
     return {"collection_id": collection_id, "title": title}
 
 
@@ -1153,20 +970,13 @@ async def update_collection_title(
 async def delete_collection(
     collection_id: str, _email: str = Depends(require_admin)
 ):
-    item = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    item = collection_store.get(collection_id)
     if not item:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    album_ids = _collection_album_ids(collection_id)
-    with collection_albums_table.batch_writer() as batch:
-        for aid in album_ids:
-            batch.delete_item(
-                Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{aid}"}
-            )
-
-    collections_table.delete_item(Key={"collection_id": collection_id})
+    album_ids = ca_store.get_album_ids(collection_id)
+    ca_store.batch_remove(collection_id, album_ids)
+    collection_store.delete(collection_id)
 
     logger.info(
         json.dumps(
@@ -1186,9 +996,7 @@ async def add_albums_to_collection(
     payload: AddAlbumsToCollectionRequest,
     _email: str = Depends(require_admin),
 ):
-    collection = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    collection = collection_store.get(collection_id)
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -1213,17 +1021,7 @@ async def add_albums_to_collection(
         seen.add(aid)
         unique_ids.append(aid)
 
-    keys = [{"album_id": aid} for aid in unique_ids]
-    found_albums: dict = {}
-    for i in range(0, len(keys), 100):
-        chunk_keys = keys[i : i + 100]
-        request_items: dict = {ALBUMS_TABLE: {"Keys": chunk_keys}}
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for a in resp.get("Responses", {}).get(ALBUMS_TABLE, []):
-                found_albums[a["album_id"]] = a
-            request_items = resp.get("UnprocessedKeys") or {}
-
+    found_albums = album_store.batch_get(unique_ids)
     missing = [aid for aid in unique_ids if aid not in found_albums]
     if missing:
         raise HTTPException(
@@ -1232,18 +1030,7 @@ async def add_albums_to_collection(
         )
 
     now = int(time.time())
-    added = 0
-    with collection_albums_table.batch_writer() as batch:
-        for aid in unique_ids:
-            batch.put_item(
-                Item={
-                    "pk": f"COLLECTION#{collection_id}",
-                    "sk": f"ALBUM#{aid}",
-                    "created_at": now,
-                    "visibility": payload.visibility,
-                }
-            )
-            added += 1
+    added = ca_store.batch_add(collection_id, unique_ids, now, payload.visibility)
 
     logger.info(
         json.dumps(
@@ -1275,25 +1062,15 @@ async def set_album_visibility(
             detail="visibility must be 'listed' or 'unlisted'",
         )
 
-    membership = collection_albums_table.get_item(
-        Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"}
-    ).get("Item")
+    membership = ca_store.get_membership(collection_id, album_id)
     if not membership:
         raise HTTPException(status_code=404, detail="Album not in collection")
 
     if payload.visibility == "listed":
         share_id = _ensure_card_share_id(collection_id, membership)
-        collection_albums_table.update_item(
-            Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"},
-            UpdateExpression="SET visibility = :v, share_id = :s",
-            ExpressionAttributeValues={":v": "listed", ":s": share_id},
-        )
+        ca_store.set_visibility(collection_id, album_id, "listed", share_id)
     else:
-        collection_albums_table.update_item(
-            Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"},
-            UpdateExpression="SET visibility = :v",
-            ExpressionAttributeValues={":v": "unlisted"},
-        )
+        ca_store.set_visibility(collection_id, album_id, "unlisted")
 
     logger.info(
         json.dumps(
@@ -1318,15 +1095,11 @@ async def remove_album_from_collection(
     album_id: str,
     _email: str = Depends(require_admin),
 ):
-    collection = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    collection = collection_store.get(collection_id)
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    collection_albums_table.delete_item(
-        Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"}
-    )
+    ca_store.remove(collection_id, album_id)
     logger.info(
         json.dumps(
             {
@@ -1351,49 +1124,11 @@ def collection_public_url(share_id: str) -> str:
     return f"{BASE_URL}/c/{share_id}"
 
 
-def _is_album_share(share: dict) -> bool:
-    return share.get("entity_type", "album") == "album"
-
-
-def _is_collection_share(share: dict) -> bool:
-    return share.get("entity_type") == "collection"
-
-
-def _newest_album_share_for(album_id: str) -> dict | None:
-    items: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"FilterExpression": Attr("album_id").eq(album_id)}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = shares_table.scan(**kw)
-        items.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-    items = [s for s in items if _is_album_share(s)]
-    if not items:
-        return None
-    items.sort(key=lambda s: int(s.get("created_at", 0)), reverse=True)
-    return items[0]
-
-
 def _mint_album_share(album_id: str) -> str:
     now = int(time.time())
     for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
         share_id = generate_share_slug()
-        try:
-            shares_table.put_item(
-                Item={
-                    "share_id": share_id,
-                    "album_id": album_id,
-                    "entity_type": "album",
-                    "created_at": now,
-                    "view_count": 0,
-                    "zip_status": "pending",
-                },
-                ConditionExpression="attribute_not_exists(share_id)",
-            )
+        if share_store.mint_album(share_id, album_id, now):
             logger.info(
                 json.dumps(
                     {"event": "share_created", "album_id": album_id, "share_id": share_id}
@@ -1401,14 +1136,11 @@ def _mint_album_share(album_id: str) -> str:
             )
             _trigger_share_zip_build(share_id, album_id)
             return share_id
-        except ClientError as e:
-            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                raise
     raise HTTPException(status_code=500, detail="Could not generate unique share id")
 
 
 def _ensure_album_share(album_id: str) -> str:
-    existing = _newest_album_share_for(album_id)
+    existing = share_store.newest_album_share_for(album_id)
     if existing:
         return existing["share_id"]
     return _mint_album_share(album_id)
@@ -1418,17 +1150,7 @@ def _mint_collection_share(collection_id: str) -> str:
     now = int(time.time())
     for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
         share_id = generate_share_slug()
-        try:
-            shares_table.put_item(
-                Item={
-                    "share_id": share_id,
-                    "collection_id": collection_id,
-                    "entity_type": "collection",
-                    "created_at": now,
-                    "view_count": 0,
-                },
-                ConditionExpression="attribute_not_exists(share_id)",
-            )
+        if share_store.mint_collection(share_id, collection_id, now):
             logger.info(
                 json.dumps(
                     {
@@ -1439,9 +1161,6 @@ def _mint_collection_share(collection_id: str) -> str:
                 )
             )
             return share_id
-        except ClientError as e:
-            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                raise
     raise HTTPException(status_code=500, detail="Could not generate unique share id")
 
 
@@ -1451,12 +1170,12 @@ def _derivative_url(photo_id: str, variant: str) -> str:
 
 @app.post("/api/albums/{album_id}/shares")
 async def create_album_share(album_id: str, _email: str = Depends(require_admin)):
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
     share_id = _mint_album_share(album_id)
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item") or {}
+    share = share_store.get(share_id) or {}
 
     return {
         "share_id": share_id,
@@ -1468,18 +1187,7 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
 
 @app.get("/api/albums/{album_id}/shares")
 async def list_album_shares(album_id: str, _email: str = Depends(require_admin)):
-    items: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"FilterExpression": Attr("album_id").eq(album_id)}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = shares_table.scan(**kw)
-        items.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-
+    items = share_store.scan_by_album(album_id)
     items.sort(key=lambda s: int(s.get("created_at", 0)), reverse=True)
     shares = [
         {
@@ -1526,10 +1234,10 @@ def _render_public_album_head_meta(
 
 @app.get("/a/{share_id}", response_class=HTMLResponse)
 async def public_album_page(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
-    if not share or not _is_album_share(share):
+    share = share_store.get(share_id)
+    if not share or not share_store.is_album_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
-    album = albums_table.get_item(Key={"album_id": share["album_id"]}).get("Item")
+    album = album_store.get(share["album_id"])
     album_title = (album or {}).get("title", "") if album else ""
     cover_photo_id = (album or {}).get("cover_photo_id")
     head_meta = _render_public_album_head_meta(share_id, album_title, cover_photo_id)
@@ -1564,13 +1272,11 @@ def _render_public_collection_head_meta(
 
 
 def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
-    if not share or not _is_collection_share(share):
+    share = share_store.get(share_id)
+    if not share or not share_store.is_collection_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     collection_id = share["collection_id"]
-    collection = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    collection = collection_store.get(collection_id)
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
     return share, collection
@@ -1580,14 +1286,14 @@ def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
 async def public_collection_page(share_id: str):
     _share, collection = _resolve_collection_share(share_id)
     cover_photo_id: str | None = None
-    memberships = _collection_album_memberships(collection["collection_id"])
+    memberships = ca_store.get_memberships(collection["collection_id"])
     listed_album_ids = [
         m["sk"].split("#", 1)[1]
         for m in memberships
         if m.get("visibility", "listed") == "listed"
     ]
     if listed_album_ids:
-        album_by_id = _batch_get_albums(listed_album_ids)
+        album_by_id = album_store.batch_get(listed_album_ids)
         for aid in listed_album_ids:
             a = album_by_id.get(aid)
             if a and a.get("cover_photo_id"):
@@ -1605,18 +1311,14 @@ async def get_public_collection(share_id: str):
     _share, collection = _resolve_collection_share(share_id)
     collection_id = collection["collection_id"]
 
-    collections_table.update_item(
-        Key={"collection_id": collection_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    collection_store.increment_view_count(collection_id)
 
-    memberships = _collection_album_memberships(collection_id)
+    memberships = ca_store.get_memberships(collection_id)
     listed_memberships = [
         m for m in memberships if m.get("visibility", "listed") == "listed"
     ]
     album_ids = [m["sk"].split("#", 1)[1] for m in listed_memberships]
-    album_by_id = _batch_get_albums(album_ids)
+    album_by_id = album_store.batch_get(album_ids)
 
     cards: list[dict] = []
     for m in listed_memberships:
@@ -1636,40 +1338,20 @@ async def get_public_collection(share_id: str):
     }
 
 
-def _album_photo_ids_in_order(album_id: str) -> list[str]:
-    memberships: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"KeyConditionExpression": Key("pk").eq(f"ALBUM#{album_id}")}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = memberships_table.query(**kw)
-        memberships.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
-    return [m["sk"].split("#", 1)[1] for m in memberships]
-
-
 @app.get("/api/public/shares/{share_id}")
 async def get_public_album(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
-    if not share or not _is_album_share(share):
+    share = share_store.get(share_id)
+    if not share or not share_store.is_album_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
 
-    item = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    item = album_store.get(album_id)
     if not item:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    album_store.increment_view_count(album_id)
 
-    photo_ids = _album_photo_ids_in_order(album_id)
+    photo_ids = membership_store.get_photo_ids_in_order(album_id)
 
     photos = []
     for pid in photo_ids:
@@ -1742,11 +1424,7 @@ def _build_share_zip_task(event: dict) -> dict:
     try:
         included = _build_album_zip(album_id, zip_key)
     except Exception as exc:
-        shares_table.update_item(
-            Key={"share_id": share_id},
-            UpdateExpression="SET zip_status = :s, zip_error = :e",
-            ExpressionAttributeValues={":s": "failed", ":e": str(exc)[:500]},
-        )
+        share_store.set_zip_status_failed(share_id, str(exc)[:500])
         logger.error(
             json.dumps(
                 {
@@ -1761,11 +1439,7 @@ def _build_share_zip_task(event: dict) -> dict:
         )
         raise
 
-    shares_table.update_item(
-        Key={"share_id": share_id},
-        UpdateExpression="SET zip_status = :s, photo_count = :c REMOVE zip_error",
-        ExpressionAttributeValues={":s": "ready", ":c": included},
-    )
+    share_store.set_zip_status_ready(share_id, included)
     logger.info(
         json.dumps(
             {
@@ -1780,21 +1454,11 @@ def _build_share_zip_task(event: dict) -> dict:
 
 
 def _build_album_zip(album_id: str, zip_key: str) -> int:
-    photo_ids = _album_photo_ids_in_order(album_id)
+    photo_ids = membership_store.get_photo_ids_in_order(album_id)
     if not photo_ids:
         return 0
 
-    photo_by_id: dict = {}
-    for i in range(0, len(photo_ids), 100):
-        chunk = photo_ids[i : i + 100]
-        request_items: dict = {
-            PHOTOS_TABLE: {"Keys": [{"photo_id": pid} for pid in chunk]}
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
-                photo_by_id[p["photo_id"]] = p
-            request_items = resp.get("UnprocessedKeys") or {}
+    photo_by_id = photo_store.batch_get(photo_ids)
 
     included = 0
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as tmp:
@@ -1816,12 +1480,12 @@ def _build_album_zip(album_id: str, zip_key: str) -> int:
 
 @app.get("/api/public/shares/{share_id}/download")
 async def download_public_album(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = share_store.get(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
 
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
@@ -1833,19 +1497,11 @@ async def download_public_album(share_id: str):
         return JSONResponse({"status": "pending"}, status_code=202)
 
     if zip_status == "failed" or (zip_status != "ready" and not zip_present):
-        shares_table.update_item(
-            Key={"share_id": share_id},
-            UpdateExpression="SET zip_status = :s REMOVE zip_error",
-            ExpressionAttributeValues={":s": "pending"},
-        )
+        share_store.set_zip_status_pending(share_id)
         _trigger_share_zip_build(share_id, album_id)
         return JSONResponse({"status": "pending"}, status_code=202)
 
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="ADD download_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    album_store.increment_download_count(album_id)
 
     filename = f"{_sanitize_zip_filename(album.get('title', '') or 'album')}.zip"
     download_url = s3_client.generate_presigned_url(
@@ -1884,20 +1540,20 @@ async def public_photo_page(share_id: str, photo_id: str):
 
 @app.get("/api/public/shares/{share_id}/photos/{photo_id}")
 async def get_public_photo(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = share_store.get(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
 
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+    album = album_store.get(album_id)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    photo = photo_store.get(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    photo_ids = _album_photo_ids_in_order(album_id)
+    photo_ids = membership_store.get_photo_ids_in_order(album_id)
     try:
         idx = photo_ids.index(photo_id)
     except ValueError:
@@ -1905,11 +1561,7 @@ async def get_public_photo(share_id: str, photo_id: str):
     prev_photo_id = photo_ids[idx - 1] if idx > 0 else None
     next_photo_id = photo_ids[idx + 1] if idx + 1 < len(photo_ids) else None
 
-    photos_table.update_item(
-        Key={"photo_id": photo_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    photo_store.increment_view_count(photo_id)
     logger.info(
         json.dumps(
             {
@@ -1947,19 +1599,12 @@ async def get_public_photo(share_id: str, photo_id: str):
 
 @app.post("/api/public/shares/{share_id}/photos/{photo_id}/view")
 async def increment_public_photo_view(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = share_store.get(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
-    membership = memberships_table.get_item(
-        Key={"pk": f"ALBUM#{share['album_id']}", "sk": f"PHOTO#{photo_id}"}
-    ).get("Item")
-    if not membership:
+    if not membership_store.is_photo_in_album(share["album_id"], photo_id):
         raise HTTPException(status_code=404, detail="Photo not in album")
-    photos_table.update_item(
-        Key={"photo_id": photo_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    photo_store.increment_view_count(photo_id)
     logger.info(
         json.dumps(
             {
@@ -1975,29 +1620,23 @@ async def increment_public_photo_view(share_id: str, photo_id: str):
 
 @app.get("/api/public/shares/{share_id}/photos/{photo_id}/download")
 async def download_public_photo(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = share_store.get(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
 
-    membership = memberships_table.get_item(
-        Key={"pk": f"ALBUM#{album_id}", "sk": f"PHOTO#{photo_id}"}
-    ).get("Item")
+    membership = membership_store.is_photo_in_album(album_id, photo_id)
     if not membership:
         raise HTTPException(status_code=404, detail="Photo not in album")
 
-    photo = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    photo = photo_store.get(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
     s3_key = photo["s3_key"]
     ext = s3_key.rsplit(".", 1)[-1].lower()
 
-    photos_table.update_item(
-        Key={"photo_id": photo_id},
-        UpdateExpression="ADD download_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    photo_store.increment_download_count(photo_id)
 
     download_url = s3_client.generate_presigned_url(
         "get_object",
@@ -2033,16 +1672,6 @@ class PresignRequest(BaseModel):
     files: list[PresignFile]
 
 
-def _lookup_photo_by_sha256(sha256: str) -> dict | None:
-    resp = photos_table.query(
-        IndexName="BySha256",
-        KeyConditionExpression=Key("sha256").eq(sha256),
-        Limit=1,
-    )
-    items = resp.get("Items", [])
-    return items[0] if items else None
-
-
 def _sanitize_photo_basename(filename: str) -> str:
     name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     stem = name.rsplit(".", 1)[0] if "." in name else name
@@ -2073,7 +1702,7 @@ async def presign_uploads(
             )
 
         if f.sha256:
-            existing = _lookup_photo_by_sha256(f.sha256)
+            existing = photo_store.find_by_sha256(f.sha256)
             if existing:
                 uploads.append(
                     {
@@ -2112,14 +1741,9 @@ async def presign_uploads(
 
 @app.get("/api/photos")
 async def list_photos(_email: str = Depends(require_admin)):
-    resp = photos_table.query(
-        IndexName="ByTakenAt",
-        KeyConditionExpression=Key("entity_type").eq("PHOTO"),
-        ScanIndexForward=False,
-        Limit=PHOTO_PAGE_LIMIT,
-    )
+    items = photo_store.list_by_taken_at(PHOTO_PAGE_LIMIT)
     photos = []
-    for item in resp.get("Items", []):
+    for item in items:
         photo_id = item["photo_id"]
         photos.append(
             {
@@ -2153,21 +1777,8 @@ async def photos_exists(
             status_code=400,
             detail=f"Cannot check more than {PHOTOS_EXISTS_MAX} photos at once",
         )
-    exists: list[str] = []
-    for i in range(0, len(payload.photo_ids), 100):
-        chunk = payload.photo_ids[i : i + 100]
-        request_items: dict = {
-            PHOTOS_TABLE: {
-                "Keys": [{"photo_id": pid} for pid in chunk],
-                "ProjectionExpression": "photo_id",
-            }
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
-                exists.append(p["photo_id"])
-            request_items = resp.get("UnprocessedKeys") or {}
-    return {"exists": exists}
+    found = photo_store.check_exist(payload.photo_ids)
+    return {"exists": list(found)}
 
 
 @app.get("/photo/{photo_id}", response_class=HTMLResponse)
@@ -2177,7 +1788,7 @@ async def photo_detail_page(photo_id: str, _email: str = Depends(require_admin))
 
 @app.get("/api/photos/{photo_id}/original")
 async def view_photo_original(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    item = photo_store.get(photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2196,7 +1807,7 @@ async def view_photo_original(photo_id: str, _email: str = Depends(require_admin
 
 @app.get("/api/photos/{photo_id}/download")
 async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    item = photo_store.get(photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2215,7 +1826,7 @@ async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
 
 @app.get("/api/photos/{photo_id}")
 async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    item = photo_store.get(photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -2223,24 +1834,8 @@ async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
     s3_key = item["s3_key"]
     ext = s3_key.rsplit(".", 1)[-1].lower()
 
-    newer = photos_table.query(
-        IndexName="ByTakenAt",
-        KeyConditionExpression=(
-            Key("entity_type").eq("PHOTO") & Key("taken_at").gt(taken_at)
-        ),
-        ScanIndexForward=True,
-        Limit=1,
-    )
-    older = photos_table.query(
-        IndexName="ByTakenAt",
-        KeyConditionExpression=(
-            Key("entity_type").eq("PHOTO") & Key("taken_at").lt(taken_at)
-        ),
-        ScanIndexForward=False,
-        Limit=1,
-    )
-    prev_items = newer.get("Items") or []
-    next_items = older.get("Items") or []
+    prev_items = photo_store.find_newer("PHOTO", taken_at, 1)
+    next_items = photo_store.find_older("PHOTO", taken_at, 1)
     prev_photo_id = prev_items[0]["photo_id"] if prev_items else None
     next_photo_id = next_items[0]["photo_id"] if next_items else None
 
