@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
+from database import photos
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -1893,7 +1894,7 @@ async def get_public_photo(share_id: str, photo_id: str):
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    photo = photos.get_by_id(photo_id=photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -1986,7 +1987,7 @@ async def download_public_photo(share_id: str, photo_id: str):
     if not membership:
         raise HTTPException(status_code=404, detail="Photo not in album")
 
-    photo = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    photo = photos.get_by_id(photo_id=photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -2177,7 +2178,7 @@ async def photo_detail_page(photo_id: str, _email: str = Depends(require_admin))
 
 @app.get("/api/photos/{photo_id}/original")
 async def view_photo_original(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    item = photos.get_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2196,7 +2197,7 @@ async def view_photo_original(photo_id: str, _email: str = Depends(require_admin
 
 @app.get("/api/photos/{photo_id}/download")
 async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    item = photos.get_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2215,7 +2216,7 @@ async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
 
 @app.get("/api/photos/{photo_id}")
 async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
+    item = photos.get_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
 
