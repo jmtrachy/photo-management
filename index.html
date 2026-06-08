@@ -45,6 +45,18 @@
       text-decoration: none;
     }
     .top-header a.signout:hover { color: var(--fg); text-decoration: underline; }
+    .menu-toggle {
+      display: none;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--fg);
+      font-size: 1.05rem;
+      line-height: 1;
+      padding: 0.35rem 0.55rem;
+      cursor: pointer;
+    }
+    .menu-toggle:hover { background: var(--bg); }
 
     .layout {
       flex: 1 1 auto;
@@ -163,6 +175,8 @@
         border-right: none;
         border-bottom: 1px solid var(--border);
       }
+      .sidebar.collapsed { display: none; }
+      .menu-toggle { display: inline-flex; }
       main { padding: 1.25rem; }
     }
 
@@ -403,11 +417,12 @@
 </head>
 <body>
   <header class="top-header">
+    <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Show or hide menu" aria-expanded="false">☰</button>
     <h1>Your Photographs</h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
   <div class="layout">
-    <aside class="sidebar">
+    <aside class="sidebar collapsed">
       <nav class="sidebar-section">
         <a class="nav-link active" href="/">All Photos</a>
         <a class="nav-link" href="/albums">Albums</a>
@@ -502,6 +517,7 @@
     function enterSelectionMode() {
       selectionMode = true;
       document.body.classList.add("selecting");
+      if (window.__showTray) window.__showTray();
     }
 
     function exitSelectionMode() {
@@ -791,6 +807,21 @@
       if (isAlbumModalOpen()) closeAlbumModal();
       else if (selectionMode) exitSelectionMode();
     });
+  </script>
+  <script>
+    (function () {
+      var toggle = document.getElementById("menu-toggle");
+      var sidebar = document.querySelector(".sidebar");
+      if (!toggle || !sidebar) return;
+      toggle.addEventListener("click", function () {
+        var collapsed = sidebar.classList.toggle("collapsed");
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+      });
+      window.__showTray = function () {
+        sidebar.classList.remove("collapsed");
+        toggle.setAttribute("aria-expanded", "true");
+      };
+    })();
   </script>
 </body>
 </html>
