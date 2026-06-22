@@ -85,3 +85,21 @@ def test_get_photos_by_ids_retries_unprocessed_keys():
 
     assert result == {"a": {"photo_id": "a"}, "b": {"photo_id": "b"}}
     assert mock_dynamodb.batch_get_item.call_count == 2
+
+
+def test_reset_photo_counts_zeroes_view_and_download():
+    with patch.object(photos, "photos_table") as mock_table:
+        photos.reset_photo_counts("sunset_01_abc123")
+
+    mock_table.update_item.assert_called_once_with(
+        Key={"photo_id": "sunset_01_abc123"},
+        UpdateExpression="SET view_count = :zero, download_count = :zero",
+        ExpressionAttributeValues={":zero": 0},
+    )
+
+
+def test_reset_photo_counts_noop_for_empty_id():
+    with patch.object(photos, "photos_table") as mock_table:
+        photos.reset_photo_counts("")
+
+    mock_table.update_item.assert_not_called()
