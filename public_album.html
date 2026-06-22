@@ -149,11 +149,19 @@
       return card;
     }
 
+    function viewBeacon() {
+      fetch(
+        `/api/public/shares/${encodeURIComponent(shareId)}/view`,
+        { method: "POST", keepalive: true }
+      ).catch(() => {});
+    }
+
     async function load() {
       try {
         const resp = await fetch(`/api/public/shares/${encodeURIComponent(shareId)}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
+        viewBeacon();
 
         titleEl.textContent = data.title || "Untitled album";
         document.title = data.title || "Album";
