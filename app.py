@@ -1647,12 +1647,6 @@ async def get_public_album(share_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    albums_table.update_item(
-        Key={"album_id": album_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
-
     photo_ids = _album_photo_ids_in_order(album_id)
 
     photos = []
@@ -1665,6 +1659,29 @@ async def get_public_album(share_id: str):
         "event_date": item.get("event_date"),
         "photos": photos,
     }
+
+
+@app.post("/api/public/shares/{share_id}/view")
+async def increment_public_album_view(share_id: str):
+    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    if not share or not _is_album_share(share):
+        raise HTTPException(status_code=404, detail="Share not found")
+    album_id = share["album_id"]
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+    logger.info(
+        json.dumps(
+            {
+                "event": "public_album_viewed",
+                "share_id": share_id,
+                "album_id": album_id,
+            }
+        )
+    )
+    return {"ok": True}
 
 
 def _sanitize_zip_filename(s: str) -> str:
