@@ -43,4 +43,20 @@ def get_photos_by_ids(
     return photo_by_id
 
 
+def reset_photo_counts(photo_id: str) -> None:
+    """
+    Resets a photo's counts (both view and download) to zero. Mostly used to reset
+    photos when testing count capabilities or after creating an album and wanting to refresh
+    before sending out externally.
+    """
+    if not photo_id:
+        return
+
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="SET view_count = :zero, download_count = :zero",
+        ExpressionAttributeValues={":zero": 0},
+    )
+
+
 

@@ -866,11 +866,7 @@ async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)
     )
 
     for pid in photo_ids:
-        photos_table.update_item(
-            Key={"photo_id": pid},
-            UpdateExpression="SET view_count = :zero, download_count = :zero",
-            ExpressionAttributeValues={":zero": 0},
-        )
+        photosdb.reset_photo_counts(pid)
 
     logger.info(
         json.dumps(
