@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
-from database import photos
+from database import photos as photosdb
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -356,17 +356,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
     memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
     photo_ids = [m["sk"].split("#", 1)[1] for m in memberships]
 
-    photo_by_id: dict = {}
-    for i in range(0, len(photo_ids), 100):
-        chunk = photo_ids[i : i + 100]
-        request_items: dict = {
-            PHOTOS_TABLE: {"Keys": [{"photo_id": pid} for pid in chunk]}
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
-                photo_by_id[p["photo_id"]] = p
-            request_items = resp.get("UnprocessedKeys") or {}
+    photo_by_id = photosdb.get_photos_by_ids(photo_ids)
 
     photos = []
     for pid in photo_ids:
@@ -528,14 +518,7 @@ async def add_photos_to_album(
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    keys = [{"photo_id": pid} for pid in payload.photo_ids]
-    photo_items: list[dict] = []
-    request_items: dict = {PHOTOS_TABLE: {"Keys": keys}}
-    while request_items:
-        resp = dynamodb.batch_get_item(RequestItems=request_items)
-        photo_items.extend(resp.get("Responses", {}).get(PHOTOS_TABLE, []))
-        request_items = resp.get("UnprocessedKeys") or {}
-    photo_by_id = {p["photo_id"]: p for p in photo_items}
+    photo_by_id = photosdb.get_photos_by_ids(payload.photo_ids)
 
     routing = _build_routing_context(album_id)
     routing_active = routing["target_in_collections"]
@@ -1785,17 +1768,7 @@ def _build_album_zip(album_id: str, zip_key: str) -> int:
     if not photo_ids:
         return 0
 
-    photo_by_id: dict = {}
-    for i in range(0, len(photo_ids), 100):
-        chunk = photo_ids[i : i + 100]
-        request_items: dict = {
-            PHOTOS_TABLE: {"Keys": [{"photo_id": pid} for pid in chunk]}
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
-                photo_by_id[p["photo_id"]] = p
-            request_items = resp.get("UnprocessedKeys") or {}
+    photo_by_id = photosdb.get_photos_by_ids(photo_ids)
 
     included = 0
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as tmp:
@@ -1894,7 +1867,7 @@ async def get_public_photo(share_id: str, photo_id: str):
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo = photos.get_by_id(photo_id=photo_id)
+    photo = photosdb.get_photo_by_id(photo_id=photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -1987,7 +1960,7 @@ async def download_public_photo(share_id: str, photo_id: str):
     if not membership:
         raise HTTPException(status_code=404, detail="Photo not in album")
 
-    photo = photos.get_by_id(photo_id=photo_id)
+    photo = photosdb.get_photo_by_id(photo_id=photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -2154,21 +2127,8 @@ async def photos_exists(
             status_code=400,
             detail=f"Cannot check more than {PHOTOS_EXISTS_MAX} photos at once",
         )
-    exists: list[str] = []
-    for i in range(0, len(payload.photo_ids), 100):
-        chunk = payload.photo_ids[i : i + 100]
-        request_items: dict = {
-            PHOTOS_TABLE: {
-                "Keys": [{"photo_id": pid} for pid in chunk],
-                "ProjectionExpression": "photo_id",
-            }
-        }
-        while request_items:
-            resp = dynamodb.batch_get_item(RequestItems=request_items)
-            for p in resp.get("Responses", {}).get(PHOTOS_TABLE, []):
-                exists.append(p["photo_id"])
-            request_items = resp.get("UnprocessedKeys") or {}
-    return {"exists": exists}
+    found = photosdb.get_photos_by_ids(payload.photo_ids, projection="photo_id")
+    return {"exists": list(found.keys())}
 
 
 @app.get("/photo/{photo_id}", response_class=HTMLResponse)
@@ -2178,7 +2138,7 @@ async def photo_detail_page(photo_id: str, _email: str = Depends(require_admin))
 
 @app.get("/api/photos/{photo_id}/original")
 async def view_photo_original(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos.get_by_id(photo_id=photo_id)
+    item = photosdb.get_photo_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2197,7 +2157,7 @@ async def view_photo_original(photo_id: str, _email: str = Depends(require_admin
 
 @app.get("/api/photos/{photo_id}/download")
 async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos.get_by_id(photo_id=photo_id)
+    item = photosdb.get_photo_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2216,7 +2176,7 @@ async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
 
 @app.get("/api/photos/{photo_id}")
 async def get_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photos.get_by_id(photo_id=photo_id)
+    item = photosdb.get_photo_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
 
