@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import logging
@@ -27,7 +28,6 @@ logger.setLevel(logging.INFO)
 
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
 LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
-PHOTOS_TABLE = os.environ["PHOTOS_TABLE"]
 ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
 MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
 SHARES_TABLE = os.environ["SHARES_TABLE"]
@@ -63,7 +63,6 @@ s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
 dynamodb = boto3.resource("dynamodb")
 tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
-photos_table = dynamodb.Table(PHOTOS_TABLE)
 albums_table = dynamodb.Table(ALBUMS_TABLE)
 memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
 shares_table = dynamodb.Table(SHARES_TABLE)
@@ -1869,69 +1868,6 @@ async def public_photo_page(share_id: str, photo_id: str):
     return _PUBLIC_PHOTO_HTML
 
 
-@app.get("/api/public/shares/{share_id}/photos/{photo_id}")
-async def get_public_photo(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
-    if not share:
-        raise HTTPException(status_code=404, detail="Share not found")
-    album_id = share["album_id"]
-
-    album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
-    if not album:
-        raise HTTPException(status_code=404, detail="Album not found")
-
-    photo = photosdb.get_photo_by_id(photo_id=photo_id)
-    if not photo:
-        raise HTTPException(status_code=404, detail="Photo not found")
-
-    photo_ids = _album_photo_ids_in_order(album_id)
-    try:
-        idx = photo_ids.index(photo_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Photo not in album")
-    prev_photo_id = photo_ids[idx - 1] if idx > 0 else None
-    next_photo_id = photo_ids[idx + 1] if idx + 1 < len(photo_ids) else None
-
-    photos_table.update_item(
-        Key={"photo_id": photo_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
-    logger.info(
-        json.dumps(
-            {
-                "event": "public_photo_viewed",
-                "share_id": share_id,
-                "album_id": album_id,
-                "photo_id": photo_id,
-            }
-        )
-    )
-
-    s3_key = photo["s3_key"]
-    ext = s3_key.rsplit(".", 1)[-1].lower()
-    original_url = s3_client.generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": PHOTOS_BUCKET,
-            "Key": s3_key,
-            "ResponseContentType": EXT_TO_CONTENT_TYPE.get(ext, "application/octet-stream"),
-        },
-        ExpiresIn=IMAGE_GET_TTL_SECONDS,
-    )
-    return {
-        "photo_id": photo_id,
-        "album_id": album_id,
-        "album_title": album.get("title", ""),
-        "original_url": original_url,
-        "medium_url": _derivative_url(photo_id, "medium"),
-        "prev_photo_id": prev_photo_id,
-        "next_photo_id": next_photo_id,
-        "prev_medium_url": _derivative_url(prev_photo_id, "medium") if prev_photo_id else None,
-        "next_medium_url": _derivative_url(next_photo_id, "medium") if next_photo_id else None,
-    }
-
-
 @app.post("/api/public/shares/{share_id}/photos/{photo_id}/view")
 async def increment_public_photo_view(share_id: str, photo_id: str):
     share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
@@ -1942,11 +1878,7 @@ async def increment_public_photo_view(share_id: str, photo_id: str):
     ).get("Item")
     if not membership:
         raise HTTPException(status_code=404, detail="Photo not in album")
-    photos_table.update_item(
-        Key={"photo_id": photo_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    photosdb.increment_photo_view_count(photo_id=photo_id)
     logger.info(
         json.dumps(
             {
@@ -1980,11 +1912,8 @@ async def download_public_photo(share_id: str, photo_id: str):
     s3_key = photo["s3_key"]
     ext = s3_key.rsplit(".", 1)[-1].lower()
 
-    photos_table.update_item(
-        Key={"photo_id": photo_id},
-        UpdateExpression="ADD download_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    # Make sure we count the download toward the photos numbers!
+    photosdb.increment_photo_download_count(photo_id=photo_id)
 
     download_url = s3_client.generate_presigned_url(
         "get_object",
@@ -2020,16 +1949,6 @@ class PresignRequest(BaseModel):
     files: list[PresignFile]
 
 
-def _lookup_photo_by_sha256(sha256: str) -> dict | None:
-    resp = photos_table.query(
-        IndexName="BySha256",
-        KeyConditionExpression=Key("sha256").eq(sha256),
-        Limit=1,
-    )
-    items = resp.get("Items", [])
-    return items[0] if items else None
-
-
 def _sanitize_photo_basename(filename: str) -> str:
     name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     stem = name.rsplit(".", 1)[0] if "." in name else name
@@ -2047,10 +1966,16 @@ def _generate_photo_id(filename: str) -> str:
 async def presign_uploads(
     payload: PresignRequest, _email: str = Depends(require_admin)
 ):
+    """
+    Issue presigned S3 PUT URLs for an upload batch, deduping by content hash.
+    For each file that supplies a sha256 already present in the library, skip the
+    upload and return the existing photo_id with reused=True; otherwise mint a new
+    photo_id and a presigned URL the client uses to PUT the bytes to S3."""
     if not payload.files:
         raise HTTPException(status_code=400, detail="No files supplied")
-    uploads = []
-    reused_count = 0
+
+    # Validate content types up front so a bad batch fails before any lookups.
+    exts = []
     for f in payload.files:
         ext = CONTENT_TYPE_TO_EXT.get(f.content_type)
         if not ext:
@@ -2058,18 +1983,34 @@ async def presign_uploads(
                 status_code=400,
                 detail=f"Unsupported content type: {f.content_type}",
             )
+        exts.append(ext)
 
-        if f.sha256:
-            existing = _lookup_photo_by_sha256(f.sha256)
-            if existing:
-                uploads.append(
-                    {
-                        "photo_id": existing["photo_id"],
-                        "reused": True,
-                    }
-                )
-                reused_count += 1
-                continue
+    # Dedup lookups are independent, so run them concurrently rather than one
+    # sequential round trip per file. boto3 is synchronous, so each query runs
+    # in the default executor thread pool.
+    loop = asyncio.get_running_loop()
+
+    async def _existing_for(f: PresignFile):
+        if not f.sha256:
+            return None
+        return await loop.run_in_executor(None, photosdb.get_photo_by_sha256, f.sha256)
+
+    existing_by_index = await asyncio.gather(
+        *(_existing_for(f) for f in payload.files)
+    )
+
+    uploads = []
+    reused_count = 0
+    for f, ext, existing in zip(payload.files, exts, existing_by_index):
+        if existing:
+            uploads.append(
+                {
+                    "photo_id": existing["photo_id"],
+                    "reused": True,
+                }
+            )
+            reused_count += 1
+            continue
 
         photo_id = _generate_photo_id(f.filename)
         key = f"originals/{photo_id}.{ext}"
@@ -2099,15 +2040,10 @@ async def presign_uploads(
 
 @app.get("/api/photos")
 async def list_photos(_email: str = Depends(require_admin)):
-    resp = photos_table.query(
-        IndexName="ByTakenAt",
-        KeyConditionExpression=Key("entity_type").eq("PHOTO"),
-        ScanIndexForward=False,
-        Limit=PHOTO_PAGE_LIMIT,
-    )
+    resp = photosdb.get_most_recent_photos(num_photos=PHOTO_PAGE_LIMIT)
     photos = []
     for item in resp.get("Items", []):
-        photo_id = item["photo_id"]
+        photo_id = item['photo_id']
         photos.append(
             {
                 "photo_id": photo_id,

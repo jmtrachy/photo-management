@@ -1,4 +1,7 @@
+from typing_extensions import Any
+
 from . import dynamodb, photos_table
+from boto3.dynamodb.conditions import Key
 
 _BATCH_GET_CHUNK = 100
 
@@ -43,6 +46,45 @@ def get_photos_by_ids(
     return photo_by_id
 
 
+def get_photo_by_sha256(sha256: str) -> dict | None:
+    """
+    Dedup lookup: Looks for an existing photo record with the same sha256 - if it finds one that means
+    the photo being uploaded is a duplicate.
+
+    Returns a photo if one exists, otherwise returns None
+    """
+    resp = photos_table.query(
+        IndexName="BySha256",
+        KeyConditionExpression=Key("sha256").eq(sha256),
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
+
+
+def increment_photo_view_count(photo_id: str) -> None:
+    """
+    Increment the view count of an existing photo by one
+    """
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="ADD view_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+
+
+def increment_photo_download_count(photo_id: str) -> None:
+    """
+    Increment the download count of an existing photo by one
+
+    """
+    photos_table.update_item(
+        Key={"photo_id": photo_id},
+        UpdateExpression="ADD download_count :one",
+        ExpressionAttributeValues={":one": 1},
+    )
+
+
 def reset_photo_counts(photo_id: str) -> None:
     """
     Resets a photo's counts (both view and download) to zero. Mostly used to reset
@@ -58,5 +100,17 @@ def reset_photo_counts(photo_id: str) -> None:
         ExpressionAttributeValues={":zero": 0},
     )
 
+
+def get_most_recent_photos(num_photos=50) -> dict[str, dict[str, Any]]:
+    """
+    Retrieves the most recent photos by their TakenAt timestamp. Does not
+    apply any kind of offset so it always returns just the most recent.
+    """
+    return photos_table.query(
+        IndexName="ByTakenAt",
+        KeyConditionExpression=Key("entity_type").eq("PHOTO"),
+        ScanIndexForward=False,
+        Limit=num_photos,
+    )
 
 
