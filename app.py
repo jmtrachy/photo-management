@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import logging
@@ -2021,6 +2022,12 @@ class PresignRequest(BaseModel):
 
 
 def _lookup_photo_by_sha256(sha256: str) -> dict | None:
+    """
+    Dedup lookup: Looks for an existing photo record with the same sha256 - if it finds one that means
+    the photo being uploaded is a duplicate.
+
+    Returns a photo if one exists, otherwise returns None
+    """
     resp = photos_table.query(
         IndexName="BySha256",
         KeyConditionExpression=Key("sha256").eq(sha256),
@@ -2047,10 +2054,16 @@ def _generate_photo_id(filename: str) -> str:
 async def presign_uploads(
     payload: PresignRequest, _email: str = Depends(require_admin)
 ):
+    """
+    Issue presigned S3 PUT URLs for an upload batch, deduping by content hash.
+    For each file that supplies a sha256 already present in the library, skip the
+    upload and return the existing photo_id with reused=True; otherwise mint a new
+    photo_id and a presigned URL the client uses to PUT the bytes to S3."""
     if not payload.files:
         raise HTTPException(status_code=400, detail="No files supplied")
-    uploads = []
-    reused_count = 0
+
+    # Validate content types up front so a bad batch fails before any lookups.
+    exts = []
     for f in payload.files:
         ext = CONTENT_TYPE_TO_EXT.get(f.content_type)
         if not ext:
@@ -2058,18 +2071,34 @@ async def presign_uploads(
                 status_code=400,
                 detail=f"Unsupported content type: {f.content_type}",
             )
+        exts.append(ext)
 
-        if f.sha256:
-            existing = _lookup_photo_by_sha256(f.sha256)
-            if existing:
-                uploads.append(
-                    {
-                        "photo_id": existing["photo_id"],
-                        "reused": True,
-                    }
-                )
-                reused_count += 1
-                continue
+    # Dedup lookups are independent, so run them concurrently rather than one
+    # sequential round trip per file. boto3 is synchronous, so each query runs
+    # in the default executor thread pool.
+    loop = asyncio.get_running_loop()
+
+    async def _existing_for(f: PresignFile):
+        if not f.sha256:
+            return None
+        return await loop.run_in_executor(None, _lookup_photo_by_sha256, f.sha256)
+
+    existing_by_index = await asyncio.gather(
+        *(_existing_for(f) for f in payload.files)
+    )
+
+    uploads = []
+    reused_count = 0
+    for f, ext, existing in zip(payload.files, exts, existing_by_index):
+        if existing:
+            uploads.append(
+                {
+                    "photo_id": existing["photo_id"],
+                    "reused": True,
+                }
+            )
+            reused_count += 1
+            continue
 
         photo_id = _generate_photo_id(f.filename)
         key = f"originals/{photo_id}.{ext}"
