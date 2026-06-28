@@ -1,36 +1,39 @@
 from unittest.mock import patch
 
+import pytest
 from boto3.dynamodb.conditions import Key
 
 from database import photos
+
+pytestmark = pytest.mark.asyncio
 
 
 def _batch_resp(items):
     return {"Responses": {"test-photos-table": items}}
 
 
-def test_get_by_id_returns_item_when_found():
+async def test_get_by_id_returns_item_when_found():
     fake_item = {"photo_id": "sunset_01_abc123", "filename": "sunset.jpg"}
 
     with patch.object(photos, "photos_table") as mock_table:
         mock_table.get_item.return_value = {"Item": fake_item}
 
-        result = photos.get_photo_by_id("sunset_01_abc123")
+        result = await photos.get_photo_by_id("sunset_01_abc123")
 
     assert result == fake_item
     mock_table.get_item.assert_called_once_with(Key={"photo_id": "sunset_01_abc123"})
 
 
-def test_get_by_id_returns_none_when_not_found():
+async def test_get_by_id_returns_none_when_not_found():
     with patch.object(photos, "photos_table") as mock_table:
         mock_table.get_item.return_value = {}
 
-        result = photos.get_photo_by_id("missing_id")
+        result = await photos.get_photo_by_id("missing_id")
 
     assert result is None
 
 
-def test_get_photos_by_ids_returns_mapping():
+async def test_get_photos_by_ids_returns_mapping():
     items = [
         {"photo_id": "a", "filename": "a.jpg"},
         {"photo_id": "b", "filename": "b.jpg"},
@@ -42,7 +45,7 @@ def test_get_photos_by_ids_returns_mapping():
         mock_table.name = "test-photos-table"
         mock_dynamodb.batch_get_item.return_value = _batch_resp(items)
 
-        result = photos.get_photos_by_ids(["a", "b"])
+        result = await photos.get_photos_by_ids(["a", "b"])
 
     assert result == {"a": items[0], "b": items[1]}
     mock_dynamodb.batch_get_item.assert_called_once_with(
@@ -52,7 +55,7 @@ def test_get_photos_by_ids_returns_mapping():
     )
 
 
-def test_get_photos_by_ids_passes_projection():
+async def test_get_photos_by_ids_passes_projection():
     with patch.object(photos, "photos_table") as mock_table, patch.object(
         photos, "dynamodb"
     ) as mock_dynamodb:
@@ -61,7 +64,7 @@ def test_get_photos_by_ids_passes_projection():
             [{"photo_id": "a"}]
         )
 
-        result = photos.get_photos_by_ids(["a"], projection="photo_id")
+        result = await photos.get_photos_by_ids(["a"], projection="photo_id")
 
     assert result == {"a": {"photo_id": "a"}}
     _, kwargs = mock_dynamodb.batch_get_item.call_args
@@ -71,7 +74,7 @@ def test_get_photos_by_ids_passes_projection():
     )
 
 
-def test_get_photos_by_ids_retries_unprocessed_keys():
+async def test_get_photos_by_ids_retries_unprocessed_keys():
     with patch.object(photos, "photos_table") as mock_table, patch.object(
         photos, "dynamodb"
     ) as mock_dynamodb:
@@ -83,13 +86,13 @@ def test_get_photos_by_ids_retries_unprocessed_keys():
         second = _batch_resp([{"photo_id": "b"}])
         mock_dynamodb.batch_get_item.side_effect = [first, second]
 
-        result = photos.get_photos_by_ids(["a", "b"])
+        result = await photos.get_photos_by_ids(["a", "b"])
 
     assert result == {"a": {"photo_id": "a"}, "b": {"photo_id": "b"}}
     assert mock_dynamodb.batch_get_item.call_count == 2
 
 
-def test_get_photos_by_ids_chunks_over_batch_limit():
+async def test_get_photos_by_ids_chunks_over_batch_limit():
     # 150 ids exceeds the 100-key BatchGetItem limit, so it must fetch in two chunks.
     ids = [f"p{i}" for i in range(150)]
     with patch.object(photos, "photos_table") as mock_table, patch.object(
@@ -101,7 +104,7 @@ def test_get_photos_by_ids_chunks_over_batch_limit():
             _batch_resp([{"photo_id": pid} for pid in ids[100:]]),
         ]
 
-        result = photos.get_photos_by_ids(ids)
+        result = await photos.get_photos_by_ids(ids)
 
     assert result == {pid: {"photo_id": pid} for pid in ids}
     assert mock_dynamodb.batch_get_item.call_count == 2
@@ -115,25 +118,25 @@ def test_get_photos_by_ids_chunks_over_batch_limit():
     assert len(second_keys) == 50
 
 
-def test_get_photos_by_ids_empty_list_returns_empty():
+async def test_get_photos_by_ids_empty_list_returns_empty():
     with patch.object(photos, "photos_table") as mock_table, patch.object(
         photos, "dynamodb"
     ) as mock_dynamodb:
         mock_table.name = "test-photos-table"
 
-        result = photos.get_photos_by_ids([])
+        result = await photos.get_photos_by_ids([])
 
     assert result == {}
     mock_dynamodb.batch_get_item.assert_not_called()
 
 
-def test_get_photo_by_sha256_returns_first_item_when_found():
+async def test_get_photo_by_sha256_returns_first_item_when_found():
     fake_item = {"photo_id": "sunset_01_abc123", "sha256": "deadbeef"}
 
     with patch.object(photos, "photos_table") as mock_table:
         mock_table.query.return_value = {"Items": [fake_item]}
 
-        result = photos.get_photo_by_sha256("deadbeef")
+        result = await photos.get_photo_by_sha256("deadbeef")
 
     assert result == fake_item
     mock_table.query.assert_called_once_with(
@@ -143,18 +146,18 @@ def test_get_photo_by_sha256_returns_first_item_when_found():
     )
 
 
-def test_get_photo_by_sha256_returns_none_when_not_found():
+async def test_get_photo_by_sha256_returns_none_when_not_found():
     with patch.object(photos, "photos_table") as mock_table:
         mock_table.query.return_value = {"Items": []}
 
-        result = photos.get_photo_by_sha256("deadbeef")
+        result = await photos.get_photo_by_sha256("deadbeef")
 
     assert result is None
 
 
-def test_increment_photo_view_count():
+async def test_increment_photo_view_count():
     with patch.object(photos, "photos_table") as mock_table:
-        photos.increment_photo_view_count("sunset_01_abc123")
+        await photos.increment_photo_view_count("sunset_01_abc123")
 
     mock_table.update_item.assert_called_once_with(
         Key={"photo_id": "sunset_01_abc123"},
@@ -163,9 +166,9 @@ def test_increment_photo_view_count():
     )
 
 
-def test_increment_photo_download_count():
+async def test_increment_photo_download_count():
     with patch.object(photos, "photos_table") as mock_table:
-        photos.increment_photo_download_count("sunset_01_abc123")
+        await photos.increment_photo_download_count("sunset_01_abc123")
 
     mock_table.update_item.assert_called_once_with(
         Key={"photo_id": "sunset_01_abc123"},
@@ -174,12 +177,12 @@ def test_increment_photo_download_count():
     )
 
 
-def test_get_most_recent_photos_uses_default_limit():
+async def test_get_most_recent_photos_uses_default_limit():
     resp = {"Items": [{"photo_id": "a"}]}
     with patch.object(photos, "photos_table") as mock_table:
         mock_table.query.return_value = resp
 
-        result = photos.get_most_recent_photos()
+        result = await photos.get_most_recent_photos()
 
     assert result == resp
     mock_table.query.assert_called_once_with(
@@ -190,19 +193,19 @@ def test_get_most_recent_photos_uses_default_limit():
     )
 
 
-def test_get_most_recent_photos_honors_custom_limit():
+async def test_get_most_recent_photos_honors_custom_limit():
     with patch.object(photos, "photos_table") as mock_table:
         mock_table.query.return_value = {"Items": []}
 
-        photos.get_most_recent_photos(num_photos=10)
+        await photos.get_most_recent_photos(num_photos=10)
 
     _, kwargs = mock_table.query.call_args
     assert kwargs["Limit"] == 10
 
 
-def test_reset_photo_counts_zeroes_view_and_download():
+async def test_reset_photo_counts_zeroes_view_and_download():
     with patch.object(photos, "photos_table") as mock_table:
-        photos.reset_photo_counts("sunset_01_abc123")
+        await photos.reset_photo_counts("sunset_01_abc123")
 
     mock_table.update_item.assert_called_once_with(
         Key={"photo_id": "sunset_01_abc123"},
@@ -211,8 +214,8 @@ def test_reset_photo_counts_zeroes_view_and_download():
     )
 
 
-def test_reset_photo_counts_noop_for_empty_id():
+async def test_reset_photo_counts_noop_for_empty_id():
     with patch.object(photos, "photos_table") as mock_table:
-        photos.reset_photo_counts("")
+        await photos.reset_photo_counts("")
 
     mock_table.update_item.assert_not_called()

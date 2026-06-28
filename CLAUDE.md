@@ -44,6 +44,10 @@ Match these unless there's a deliberate reason not to:
 - `npx aws-cdk deploy PhotoManagementStack`
 - `npx aws-cdk destroy PhotoManagementStack`
 
+## Separation of concerns
+- All access to DynamoDB should be written in respective modules within the `database` folder. See `database/photos.py` for examples
+- All new functions should be asyncio based, for eventual possible conversion to a long-running server
+
 ## Workflow
 
 Work lands via feature branches + PRs against `main`, not direct commits.

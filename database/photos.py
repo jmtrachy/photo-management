@@ -5,8 +5,15 @@ from boto3.dynamodb.conditions import Key
 
 _BATCH_GET_CHUNK = 100
 
+# NOTE: these functions are declared ``async`` so callers can ``await`` them and
+# the app is ready for a future long-running server, but the boto3 calls inside
+# are synchronous and block the event loop. That is fine while we run on Lambda
+# (one request per execution environment). If this ever moves to a long-running
+# ASGI server, wrap the blocking calls in ``run_in_executor`` (or switch to an
+# async AWS client) so they no longer stall the loop.
 
-def get_photo_by_id(photo_id: str) -> dict | None:
+
+async def get_photo_by_id(photo_id: str) -> dict | None:
     """
     Retrieve a single photo by its id
 
@@ -16,7 +23,7 @@ def get_photo_by_id(photo_id: str) -> dict | None:
     return photos_table.get_item(Key={"photo_id": photo_id}).get("Item")
 
 
-def get_photos_by_ids(
+async def get_photos_by_ids(
     photo_ids: list[str], projection: str | None = None
 ) -> dict[str, dict]:
     """
@@ -46,7 +53,7 @@ def get_photos_by_ids(
     return photo_by_id
 
 
-def get_photo_by_sha256(sha256: str) -> dict | None:
+async def get_photo_by_sha256(sha256: str) -> dict | None:
     """
     Dedup lookup: Looks for an existing photo record with the same sha256 - if it finds one that means
     the photo being uploaded is a duplicate.
@@ -62,7 +69,7 @@ def get_photo_by_sha256(sha256: str) -> dict | None:
     return items[0] if items else None
 
 
-def increment_photo_view_count(photo_id: str) -> None:
+async def increment_photo_view_count(photo_id: str) -> None:
     """
     Increment the view count of an existing photo by one
     """
@@ -73,7 +80,7 @@ def increment_photo_view_count(photo_id: str) -> None:
     )
 
 
-def increment_photo_download_count(photo_id: str) -> None:
+async def increment_photo_download_count(photo_id: str) -> None:
     """
     Increment the download count of an existing photo by one
 
@@ -85,7 +92,7 @@ def increment_photo_download_count(photo_id: str) -> None:
     )
 
 
-def reset_photo_counts(photo_id: str) -> None:
+async def reset_photo_counts(photo_id: str) -> None:
     """
     Resets a photo's counts (both view and download) to zero. Mostly used to reset
     photos when testing count capabilities or after creating an album and wanting to refresh
@@ -101,7 +108,7 @@ def reset_photo_counts(photo_id: str) -> None:
     )
 
 
-def get_most_recent_photos(num_photos=50) -> dict[str, dict[str, Any]]:
+async def get_most_recent_photos(num_photos=50) -> dict[str, dict[str, Any]]:
     """
     Retrieves the most recent photos by their TakenAt timestamp. Does not
     apply any kind of offset so it always returns just the most recent.
@@ -112,5 +119,3 @@ def get_most_recent_photos(num_photos=50) -> dict[str, dict[str, Any]]:
         ScanIndexForward=False,
         Limit=num_photos,
     )
-
-

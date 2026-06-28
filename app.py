@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import html
 import json
 import logging
@@ -355,7 +356,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
     memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
     photo_ids = [m["sk"].split("#", 1)[1] for m in memberships]
 
-    photo_by_id = photosdb.get_photos_by_ids(photo_ids)
+    photo_by_id = await photosdb.get_photos_by_ids(photo_ids)
 
     photos = []
     for pid in photo_ids:
@@ -517,7 +518,7 @@ async def add_photos_to_album(
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo_by_id = photosdb.get_photos_by_ids(payload.photo_ids)
+    photo_by_id = await photosdb.get_photos_by_ids(payload.photo_ids)
 
     routing = _build_routing_context(album_id)
     routing_active = routing["target_in_collections"]
@@ -865,7 +866,7 @@ async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)
     )
 
     for pid in photo_ids:
-        photosdb.reset_photo_counts(pid)
+        await photosdb.reset_photo_counts(pid)
 
     logger.info(
         json.dumps(
@@ -1775,12 +1776,30 @@ def _build_share_zip_task(event: dict) -> dict:
     return {"share_id": share_id, "photo_count": included}
 
 
+def _run_coro_sync(coro):
+    """
+    Drive an async coroutine to completion from synchronous code.
+
+    The share-zip build runs as a background task that, in Lambda, executes
+    outside any event loop, so it cannot ``await`` the async data-access layer
+    directly. When no loop is running we use ``asyncio.run``; if a loop is
+    already running (the local/ECS fallback path), we run the coroutine on a
+    dedicated thread so we never call ``asyncio.run`` inside a running loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 def _build_album_zip(album_id: str, zip_key: str) -> int:
     photo_ids = _album_photo_ids_in_order(album_id)
     if not photo_ids:
         return 0
 
-    photo_by_id = photosdb.get_photos_by_ids(photo_ids)
+    photo_by_id = _run_coro_sync(photosdb.get_photos_by_ids(photo_ids))
 
     included = 0
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as tmp:
@@ -1878,7 +1897,7 @@ async def increment_public_photo_view(share_id: str, photo_id: str):
     ).get("Item")
     if not membership:
         raise HTTPException(status_code=404, detail="Photo not in album")
-    photosdb.increment_photo_view_count(photo_id=photo_id)
+    await photosdb.increment_photo_view_count(photo_id=photo_id)
     logger.info(
         json.dumps(
             {
@@ -1905,7 +1924,7 @@ async def download_public_photo(share_id: str, photo_id: str):
     if not membership:
         raise HTTPException(status_code=404, detail="Photo not in album")
 
-    photo = photosdb.get_photo_by_id(photo_id=photo_id)
+    photo = await photosdb.get_photo_by_id(photo_id=photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
@@ -1913,7 +1932,7 @@ async def download_public_photo(share_id: str, photo_id: str):
     ext = s3_key.rsplit(".", 1)[-1].lower()
 
     # Make sure we count the download toward the photos numbers!
-    photosdb.increment_photo_download_count(photo_id=photo_id)
+    await photosdb.increment_photo_download_count(photo_id=photo_id)
 
     download_url = s3_client.generate_presigned_url(
         "get_object",
@@ -1985,15 +2004,14 @@ async def presign_uploads(
             )
         exts.append(ext)
 
-    # Dedup lookups are independent, so run them concurrently rather than one
-    # sequential round trip per file. boto3 is synchronous, so each query runs
-    # in the default executor thread pool.
-    loop = asyncio.get_running_loop()
-
+    # Look up each file's dedup hash. The data-access calls are async but boto3
+    # blocks under the hood, so on Lambda these effectively run sequentially;
+    # gather() keeps the call site ready to parallelize if the data layer ever
+    # becomes truly non-blocking.
     async def _existing_for(f: PresignFile):
         if not f.sha256:
             return None
-        return await loop.run_in_executor(None, photosdb.get_photo_by_sha256, f.sha256)
+        return await photosdb.get_photo_by_sha256(f.sha256)
 
     existing_by_index = await asyncio.gather(
         *(_existing_for(f) for f in payload.files)
@@ -2040,7 +2058,7 @@ async def presign_uploads(
 
 @app.get("/api/photos")
 async def list_photos(_email: str = Depends(require_admin)):
-    resp = photosdb.get_most_recent_photos(num_photos=PHOTO_PAGE_LIMIT)
+    resp = await photosdb.get_most_recent_photos(num_photos=PHOTO_PAGE_LIMIT)
     photos = []
     for item in resp.get("Items", []):
         photo_id = item['photo_id']
@@ -2076,7 +2094,7 @@ async def photos_exists(
             status_code=400,
             detail=f"Cannot check more than {PHOTOS_EXISTS_MAX} photos at once",
         )
-    found = photosdb.get_photos_by_ids(payload.photo_ids, projection="photo_id")
+    found = await photosdb.get_photos_by_ids(payload.photo_ids, projection="photo_id")
     return {"exists": list(found.keys())}
 
 
@@ -2087,7 +2105,7 @@ async def photo_detail_page(photo_id: str, _email: str = Depends(require_admin))
 
 @app.get("/api/photos/{photo_id}/original")
 async def view_photo_original(photo_id: str, _email: str = Depends(require_admin)):
-    item = photosdb.get_photo_by_id(photo_id=photo_id)
+    item = await photosdb.get_photo_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
@@ -2106,7 +2124,7 @@ async def view_photo_original(photo_id: str, _email: str = Depends(require_admin
 
 @app.get("/api/photos/{photo_id}/download")
 async def download_photo(photo_id: str, _email: str = Depends(require_admin)):
-    item = photosdb.get_photo_by_id(photo_id=photo_id)
+    item = await photosdb.get_photo_by_id(photo_id=photo_id)
     if not item:
         raise HTTPException(status_code=404, detail="Photo not found")
     s3_key = item["s3_key"]
