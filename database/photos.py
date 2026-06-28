@@ -1,9 +1,12 @@
+import os
 from typing_extensions import Any
 
-from . import dynamodb, photos_table
+from . import dynamodb
 from boto3.dynamodb.conditions import Key
 
 _BATCH_GET_CHUNK = 100
+
+photos_table = dynamodb.Table(os.environ["PHOTOS_TABLE"])
 
 # NOTE: these functions are declared ``async`` so callers can ``await`` them and
 # the app is ready for a future long-running server, but the boto3 calls inside
