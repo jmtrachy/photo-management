@@ -23,12 +23,12 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
 from database import photos as photosdb
+from database import tokens
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
-LOGIN_TOKENS_TABLE = os.environ["LOGIN_TOKENS_TABLE"]
 ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
 MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
 SHARES_TABLE = os.environ["SHARES_TABLE"]
@@ -45,7 +45,6 @@ ADMIN_EMAILS = {
 
 SESSION_COOKIE = "session"
 SESSION_MAX_AGE_SECONDS = 30 * 24 * 3600
-TOKEN_TTL_SECONDS = 15 * 60
 PRESIGN_PUT_TTL_SECONDS = 15 * 60
 IMAGE_GET_TTL_SECONDS = 60 * 60
 PHOTO_PAGE_LIMIT = 200
@@ -63,7 +62,6 @@ ses = boto3.client("ses")
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
 dynamodb = boto3.resource("dynamodb")
-tokens_table = dynamodb.Table(LOGIN_TOKENS_TABLE)
 albums_table = dynamodb.Table(ALBUMS_TABLE)
 memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
 shares_table = dynamodb.Table(SHARES_TABLE)
@@ -134,26 +132,6 @@ def require_admin(request: Request) -> str:
 
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
-
-
-def store_token(token: str, email: str) -> None:
-    tokens_table.put_item(
-        Item={
-            "token": token,
-            "email": email,
-            "expires_at": int(time.time()) + TOKEN_TTL_SECONDS,
-        }
-    )
-
-
-def consume_token(token: str) -> str | None:
-    item = tokens_table.get_item(Key={"token": token}).get("Item")
-    if not item:
-        return None
-    if int(item["expires_at"]) < int(time.time()):
-        return None
-    tokens_table.delete_item(Key={"token": token})
-    return item["email"]
 
 
 def send_magic_link(to_email: str, link: str) -> None:
@@ -2151,7 +2129,7 @@ async def login_submit(email: str = Form(...)):
     normalized = email.strip().lower()
     if normalized in ADMIN_EMAILS:
         token = generate_token()
-        store_token(token, normalized)
+        await tokens.store_token(token, normalized)
         link = f"{BASE_URL}/login/verify?token={token}"
         try:
             send_magic_link(normalized, link)
@@ -2167,7 +2145,7 @@ async def login_submit(email: str = Form(...)):
 
 @app.get("/login/verify")
 async def login_verify(token: str):
-    email = consume_token(token)
+    email = await tokens.consume_token(token)
     if not email or email.lower() not in ADMIN_EMAILS:
         return RedirectResponse(url="/login?error=invalid", status_code=302)
     response = RedirectResponse(url="/", status_code=302)
