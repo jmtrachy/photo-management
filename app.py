@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 import boto3
-from boto3.dynamodb.conditions import Attr, Key
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -23,6 +23,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
 from database import photos as photosdb
+from database import shares
 from database import tokens
 
 logger = logging.getLogger()
@@ -31,7 +32,6 @@ logger.setLevel(logging.INFO)
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
 ALBUMS_TABLE = os.environ["ALBUMS_TABLE"]
 MEMBERSHIPS_TABLE = os.environ["MEMBERSHIPS_TABLE"]
-SHARES_TABLE = os.environ["SHARES_TABLE"]
 COLLECTIONS_TABLE = os.environ["COLLECTIONS_TABLE"]
 COLLECTION_ALBUMS_TABLE = os.environ["COLLECTION_ALBUMS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
@@ -64,7 +64,6 @@ lambda_client = boto3.client("lambda")
 dynamodb = boto3.resource("dynamodb")
 albums_table = dynamodb.Table(ALBUMS_TABLE)
 memberships_table = dynamodb.Table(MEMBERSHIPS_TABLE)
-shares_table = dynamodb.Table(SHARES_TABLE)
 collections_table = dynamodb.Table(COLLECTIONS_TABLE)
 collection_albums_table = dynamodb.Table(COLLECTION_ALBUMS_TABLE)
 
@@ -1318,17 +1317,7 @@ def _is_collection_share(share: dict) -> bool:
 
 
 def _newest_album_share_for(album_id: str) -> dict | None:
-    items: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"FilterExpression": Attr("album_id").eq(album_id)}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = shares_table.scan(**kw)
-        items.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
+    items = _run_coro_sync(shares.scan_album_shares(album_id))
     items = [s for s in items if _is_album_share(s)]
     if not items:
         return None
@@ -1341,17 +1330,7 @@ def _mint_album_share(album_id: str) -> str:
     for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
         share_id = generate_share_slug()
         try:
-            shares_table.put_item(
-                Item={
-                    "share_id": share_id,
-                    "album_id": album_id,
-                    "entity_type": "album",
-                    "created_at": now,
-                    "view_count": 0,
-                    "zip_status": "pending",
-                },
-                ConditionExpression="attribute_not_exists(share_id)",
-            )
+            _run_coro_sync(shares.create_album_share(share_id, album_id, now))
             logger.info(
                 json.dumps(
                     {"event": "share_created", "album_id": album_id, "share_id": share_id}
@@ -1377,15 +1356,8 @@ def _mint_collection_share(collection_id: str) -> str:
     for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
         share_id = generate_share_slug()
         try:
-            shares_table.put_item(
-                Item={
-                    "share_id": share_id,
-                    "collection_id": collection_id,
-                    "entity_type": "collection",
-                    "created_at": now,
-                    "view_count": 0,
-                },
-                ConditionExpression="attribute_not_exists(share_id)",
+            _run_coro_sync(
+                shares.create_collection_share(share_id, collection_id, now)
             )
             logger.info(
                 json.dumps(
@@ -1414,7 +1386,7 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
         raise HTTPException(status_code=404, detail="Album not found")
 
     share_id = _mint_album_share(album_id)
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item") or {}
+    share = await shares.get_share(share_id) or {}
 
     return {
         "share_id": share_id,
@@ -1426,20 +1398,10 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
 
 @app.get("/api/albums/{album_id}/shares")
 async def list_album_shares(album_id: str, _email: str = Depends(require_admin)):
-    items: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {"FilterExpression": Attr("album_id").eq(album_id)}
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = shares_table.scan(**kw)
-        items.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
+    items = await shares.scan_album_shares(album_id)
 
     items.sort(key=lambda s: int(s.get("created_at", 0)), reverse=True)
-    shares = [
+    share_list = [
         {
             "share_id": s["share_id"],
             "album_id": s["album_id"],
@@ -1449,7 +1411,7 @@ async def list_album_shares(album_id: str, _email: str = Depends(require_admin))
         }
         for s in items
     ]
-    return {"shares": shares}
+    return {"shares": share_list}
 
 
 SITE_NAME = "photos.jamestrachy.com"
@@ -1484,7 +1446,7 @@ def _render_public_album_head_meta(
 
 @app.get("/a/{share_id}", response_class=HTMLResponse)
 async def public_album_page(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = await shares.get_share(share_id)
     if not share or not _is_album_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     album = albums_table.get_item(Key={"album_id": share["album_id"]}).get("Item")
@@ -1522,7 +1484,7 @@ def _render_public_collection_head_meta(
 
 
 def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = _run_coro_sync(shares.get_share(share_id))
     if not share or not _is_collection_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     collection_id = share["collection_id"]
@@ -1612,7 +1574,7 @@ def _album_photo_ids_in_order(album_id: str) -> list[str]:
 
 @app.get("/api/public/shares/{share_id}")
 async def get_public_album(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = await shares.get_share(share_id)
     if not share or not _is_album_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
@@ -1637,7 +1599,7 @@ async def get_public_album(share_id: str):
 
 @app.post("/api/public/shares/{share_id}/view")
 async def increment_public_album_view(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = await shares.get_share(share_id)
     if not share or not _is_album_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
@@ -1717,11 +1679,7 @@ def _build_share_zip_task(event: dict) -> dict:
     try:
         included = _build_album_zip(album_id, zip_key)
     except Exception as exc:
-        shares_table.update_item(
-            Key={"share_id": share_id},
-            UpdateExpression="SET zip_status = :s, zip_error = :e",
-            ExpressionAttributeValues={":s": "failed", ":e": str(exc)[:500]},
-        )
+        _run_coro_sync(shares.mark_zip_failed(share_id, str(exc)[:500]))
         logger.error(
             json.dumps(
                 {
@@ -1736,11 +1694,7 @@ def _build_share_zip_task(event: dict) -> dict:
         )
         raise
 
-    shares_table.update_item(
-        Key={"share_id": share_id},
-        UpdateExpression="SET zip_status = :s, photo_count = :c REMOVE zip_error",
-        ExpressionAttributeValues={":s": "ready", ":c": included},
-    )
+    _run_coro_sync(shares.mark_zip_ready(share_id, included))
     logger.info(
         json.dumps(
             {
@@ -1799,7 +1753,7 @@ def _build_album_zip(album_id: str, zip_key: str) -> int:
 
 @app.get("/api/public/shares/{share_id}/download")
 async def download_public_album(share_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = await shares.get_share(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
@@ -1816,11 +1770,7 @@ async def download_public_album(share_id: str):
         return JSONResponse({"status": "pending"}, status_code=202)
 
     if zip_status == "failed" or (zip_status != "ready" and not zip_present):
-        shares_table.update_item(
-            Key={"share_id": share_id},
-            UpdateExpression="SET zip_status = :s REMOVE zip_error",
-            ExpressionAttributeValues={":s": "pending"},
-        )
+        await shares.mark_zip_pending(share_id)
         _trigger_share_zip_build(share_id, album_id)
         return JSONResponse({"status": "pending"}, status_code=202)
 
@@ -1867,7 +1817,7 @@ async def public_photo_page(share_id: str, photo_id: str):
 
 @app.post("/api/public/shares/{share_id}/photos/{photo_id}/view")
 async def increment_public_photo_view(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = await shares.get_share(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
     membership = memberships_table.get_item(
@@ -1891,7 +1841,7 @@ async def increment_public_photo_view(share_id: str, photo_id: str):
 
 @app.get("/api/public/shares/{share_id}/photos/{photo_id}/download")
 async def download_public_photo(share_id: str, photo_id: str):
-    share = shares_table.get_item(Key={"share_id": share_id}).get("Item")
+    share = await shares.get_share(share_id)
     if not share:
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
