@@ -122,3 +122,11 @@ async def get_most_recent_photos(num_photos=50) -> dict[str, dict[str, Any]]:
         ScanIndexForward=False,
         Limit=num_photos,
     )
+
+
+async def delete_photo(photo_id: str) -> None:
+    """
+    Delete a photo record from the table. Does not touch S3 objects or album
+    memberships - the caller is responsible for that cleanup.
+    """
+    photos_table.delete_item(Key={"photo_id": photo_id})
