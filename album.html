@@ -784,6 +784,18 @@
     </div>
   </div>
 
+  <div id="delete-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+    <div class="modal">
+      <h2 id="delete-modal-title">Fully delete</h2>
+      <p id="delete-modal-body" class="modal-body">This is unrecoverable and will destroy the image, are you sure you wish to proceed</p>
+      <div id="delete-modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="delete-no-btn">Cancel</button>
+        <button type="button" class="submit danger" id="delete-yes-btn">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <div id="routing-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="routing-modal-title">
     <div class="modal routing-modal">
       <h2 id="routing-modal-title">Upload results</h2>
@@ -836,7 +848,8 @@
           <span class="select-count"><strong id="select-count">0</strong> selected</span>
           <button id="set-cover-btn" class="upload-btn" type="button" disabled>Set as cover</button>
           <button id="add-to-album-btn" class="upload-btn" type="button" disabled>Add to album</button>
-          <button id="remove-btn" class="danger-btn" type="button" disabled>Remove</button>
+          <button id="remove-btn" class="danger-btn" type="button" disabled>Remove from Album</button>
+          <button id="delete-btn" class="danger-btn" type="button" disabled>Fully delete</button>
           <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
         </div>
       </div>
@@ -1078,6 +1091,7 @@
       if (e.key !== "Escape") return;
       if (resetBackdrop.classList.contains("visible")) closeResetModal();
       else if (removeBackdrop.classList.contains("visible")) closeRemoveModal();
+      else if (deleteBackdrop.classList.contains("visible")) closeDeleteModal();
       else if (albumPickerBackdrop.classList.contains("visible")) closeAlbumPicker();
       else if (routingBackdrop.classList.contains("visible")) closeResultsModal();
       else if (selectionMode) exitSelectionMode();
@@ -1137,6 +1151,7 @@
     const setCoverBtn = document.getElementById("set-cover-btn");
     const addToAlbumBtn = document.getElementById("add-to-album-btn");
     const removeBtn = document.getElementById("remove-btn");
+    const deleteBtn = document.getElementById("delete-btn");
     const cancelSelectBtn = document.getElementById("cancel-select-btn");
 
     const albumPickerBackdrop = document.getElementById("album-picker-backdrop");
@@ -1153,6 +1168,10 @@
     const removeNoBtn = document.getElementById("remove-no-btn");
     const removeErrorEl = document.getElementById("remove-modal-error");
     const removeBodyEl = document.getElementById("remove-modal-body");
+    const deleteBackdrop = document.getElementById("delete-modal-backdrop");
+    const deleteYesBtn = document.getElementById("delete-yes-btn");
+    const deleteNoBtn = document.getElementById("delete-no-btn");
+    const deleteErrorEl = document.getElementById("delete-modal-error");
 
     function updateSelectionUI() {
       for (const card of document.querySelectorAll(".photo-card")) {
@@ -1164,6 +1183,7 @@
       setCoverBtn.disabled = selectedIds.size !== 1;
       addToAlbumBtn.disabled = selectedIds.size === 0;
       removeBtn.disabled = selectedIds.size === 0;
+      deleteBtn.disabled = selectedIds.size === 0;
     }
     function enterSelectionMode() {
       selectionMode = true;
@@ -1366,6 +1386,55 @@
         removeErrorEl.textContent = err.message;
         removeYesBtn.disabled = false;
         removeNoBtn.disabled = false;
+      }
+    });
+
+    function openDeleteModal() {
+      if (selectedIds.size === 0) return;
+      deleteErrorEl.textContent = "";
+      deleteYesBtn.disabled = false;
+      deleteNoBtn.disabled = false;
+      deleteBackdrop.classList.add("visible");
+      deleteNoBtn.focus();
+    }
+    function closeDeleteModal() {
+      deleteBackdrop.classList.remove("visible");
+    }
+    deleteBtn.addEventListener("click", openDeleteModal);
+    deleteNoBtn.addEventListener("click", closeDeleteModal);
+    deleteBackdrop.addEventListener("click", (e) => {
+      if (e.target === deleteBackdrop) closeDeleteModal();
+    });
+    deleteYesBtn.addEventListener("click", async () => {
+      const ids = [...selectedIds];
+      if (!ids.length) { closeDeleteModal(); return; }
+      deleteYesBtn.disabled = true;
+      deleteNoBtn.disabled = true;
+      deleteErrorEl.textContent = "";
+      try {
+        const resp = await fetch("/api/photos", {
+          method: "DELETE",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({photo_ids: ids}),
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        const data = await resp.json();
+        closeDeleteModal();
+        exitSelectionMode();
+        setStatus(`Deleted ${data.deleted} photo${data.deleted === 1 ? "" : "s"}`);
+        setTimeout(() => setStatus(""), 3000);
+        await load();
+      } catch (err) {
+        deleteErrorEl.textContent = err.message;
+        deleteYesBtn.disabled = false;
+        deleteNoBtn.disabled = false;
       }
     });
 
