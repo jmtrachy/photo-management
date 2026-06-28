@@ -561,13 +561,29 @@
       min-height: 0;
     }
 
+    .drawer-toggle {
+      display: none;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--fg);
+      font-size: 0.9rem;
+      padding: 0.3rem 0.6rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .drawer-toggle:hover { background: var(--bg); }
+
     @media (max-width: 720px) {
       .layout { flex-direction: column; }
       .sidebar {
         flex: 0 0 auto;
         border-right: none;
         border-bottom: 1px solid var(--border);
+        display: none;
       }
+      body.drawer-open .sidebar { display: flex; }
+      .drawer-toggle { display: inline-block; }
       main { padding: 1.25rem; }
     }
 
@@ -739,6 +755,7 @@
 </head>
 <body>
   <header class="top-header">
+    <button type="button" class="drawer-toggle" id="drawer-toggle" aria-expanded="false" aria-controls="sidebar">☰ Menu</button>
     <h1>Your Photographs</h1>
     <a class="signout" href="/logout">Sign out</a>
   </header>
@@ -803,7 +820,7 @@
   </div>
 
   <div class="layout">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <nav class="sidebar-section">
         <a class="nav-link" href="/">All Photos</a>
         <a class="nav-link active" href="/albums">Albums</a>
@@ -1716,6 +1733,17 @@
         shareBtn.disabled = false;
       }
     });
+  </script>
+  <script>
+    (function () {
+      var toggle = document.getElementById("drawer-toggle");
+      if (!toggle) return;
+      toggle.addEventListener("click", function () {
+        var open = document.body.classList.toggle("drawer-open");
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle.textContent = open ? "✕ Close" : "☰ Menu";
+      });
+    })();
   </script>
 </body>
 </html>
