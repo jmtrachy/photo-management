@@ -1069,37 +1069,6 @@ async def update_collection_title(
     return {"collection_id": collection_id, "title": title}
 
 
-@app.delete("/api/collections/{collection_id}")
-async def delete_collection(
-    collection_id: str, _email: str = Depends(require_admin)
-):
-    item = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
-    if not item:
-        raise HTTPException(status_code=404, detail="Collection not found")
-
-    album_ids = _collection_album_ids(collection_id)
-    with collection_albums_table.batch_writer() as batch:
-        for aid in album_ids:
-            batch.delete_item(
-                Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{aid}"}
-            )
-
-    collections_table.delete_item(Key={"collection_id": collection_id})
-
-    logger.info(
-        json.dumps(
-            {
-                "event": "collection_deleted",
-                "collection_id": collection_id,
-                "removed_memberships": len(album_ids),
-            }
-        )
-    )
-    return {"collection_id": collection_id, "removed_memberships": len(album_ids)}
-
-
 @app.post("/api/collections/{collection_id}/albums")
 async def add_albums_to_collection(
     collection_id: str,
@@ -1967,6 +1936,107 @@ async def photos_exists(
         )
     found = await photos_db.get_photos_by_ids(payload.photo_ids, projection="photo_id")
     return {"exists": list(found.keys())}
+
+
+class DeletePhotosRequest(BaseModel):
+    photo_ids: list[str]
+
+
+def _album_ids_for_photo(photo_id: str) -> list[str]:
+    """Return every album_id this photo is a member of, via the ByPhoto index."""
+    album_ids: list[str] = []
+    last_key = None
+    while True:
+        kw: dict = {
+            "IndexName": "ByPhoto",
+            "KeyConditionExpression": Key("sk").eq(f"PHOTO#{photo_id}"),
+        }
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = memberships_table.query(**kw)
+        for m in resp.get("Items", []):
+            pk = m["pk"]
+            if pk.startswith("ALBUM#"):
+                album_ids.append(pk.split("#", 1)[1])
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return album_ids
+
+
+@app.delete("/api/photos")
+async def delete_photos(
+    payload: DeletePhotosRequest, _email: str = Depends(require_admin)
+):
+    """Permanently delete photos from the site: their S3 original and derivatives,
+    every album membership, and the photo record itself. Unrecoverable."""
+    if not payload.photo_ids:
+        raise HTTPException(status_code=400, detail="No photos specified")
+    if len(payload.photo_ids) > ADD_TO_ALBUM_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete more than {ADD_TO_ALBUM_MAX} photos at once",
+        )
+
+    photo_ids = set(payload.photo_ids)
+
+    # Resolve each photo's record (for its original S3 key) and album memberships
+    # up front, before we start mutating anything.
+    photo_by_id = await photosdb.get_photos_by_ids(list(photo_ids))
+    albums_by_photo = {pid: _album_ids_for_photo(pid) for pid in photo_ids}
+    affected_albums = {aid for aids in albums_by_photo.values() for aid in aids}
+
+    # 1. Remove every album membership for these photos.
+    with memberships_table.batch_writer() as batch:
+        for pid, aids in albums_by_photo.items():
+            for aid in aids:
+                batch.delete_item(
+                    Key={"pk": f"ALBUM#{aid}", "sk": f"PHOTO#{pid}"}
+                )
+
+    # 2. Reassign covers for albums whose cover was one of the deleted photos.
+    #    Done after membership removal so the replacement is never a deleted photo.
+    for album_id in affected_albums:
+        album = albums_table.get_item(Key={"album_id": album_id}).get("Item")
+        if not album or album.get("cover_photo_id") not in photo_ids:
+            continue
+        remaining = _album_photo_ids_in_order(album_id)
+        if remaining:
+            albums_table.update_item(
+                Key={"album_id": album_id},
+                UpdateExpression="SET cover_photo_id = :cpid",
+                ExpressionAttributeValues={":cpid": remaining[0]},
+            )
+        else:
+            albums_table.update_item(
+                Key={"album_id": album_id},
+                UpdateExpression="REMOVE cover_photo_id",
+            )
+
+    # 3. Delete S3 objects (original + derivatives) and the photo record itself.
+    deleted = 0
+    for pid in photo_ids:
+        photo = photo_by_id.get(pid)
+        keys = [f"derivatives/{pid}/thumb.jpg", f"derivatives/{pid}/medium.jpg"]
+        if photo and photo.get("s3_key"):
+            keys.append(photo["s3_key"])
+        for key in keys:
+            s3_client.delete_object(Bucket=PHOTOS_BUCKET, Key=key)
+        await photosdb.delete_photo(pid)
+        if photo:
+            deleted += 1
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "photos_deleted",
+                "deleted": deleted,
+                "requested": len(payload.photo_ids),
+                "albums_affected": len(affected_albums),
+            }
+        )
+    )
+    return {"deleted": deleted, "albums_affected": len(affected_albums)}
 
 
 @app.get("/photo/{photo_id}", response_class=HTMLResponse)

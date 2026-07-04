@@ -219,3 +219,12 @@ async def test_reset_photo_counts_noop_for_empty_id():
         await photos.reset_photo_counts("")
 
     mock_table.update_item.assert_not_called()
+
+
+async def test_delete_photo_deletes_item():
+    with patch.object(photos, "photos_table") as mock_table:
+        await photos.delete_photo("sunset_01_abc123")
+
+    mock_table.delete_item.assert_called_once_with(
+        Key={"photo_id": "sunset_01_abc123"}
+    )
