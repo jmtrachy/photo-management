@@ -39,6 +39,39 @@ async def test_list_album_photo_ids_follows_pagination():
     assert mock_table.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"k": 1}
 
 
+async def test_list_photo_album_ids_uses_by_photo_index():
+    with patch.object(memberships, "memberships_table") as mock_table:
+        mock_table.query.return_value = {
+            "Items": [
+                {"pk": "ALBUM#a1", "sk": "PHOTO#p1"},
+                {"pk": "ALBUM#a2", "sk": "PHOTO#p1"},
+                # A non-album row (defensive filter should skip it).
+                {"pk": "OTHER#x", "sk": "PHOTO#p1"},
+            ]
+        }
+
+        result = await memberships.list_photo_album_ids("p1")
+
+    assert result == ["a1", "a2"]
+    _, kwargs = mock_table.query.call_args
+    assert kwargs["IndexName"] == "ByPhoto"
+    assert kwargs["KeyConditionExpression"] == Key("sk").eq("PHOTO#p1")
+
+
+async def test_list_photo_album_ids_follows_pagination():
+    with patch.object(memberships, "memberships_table") as mock_table:
+        mock_table.query.side_effect = [
+            {"Items": [{"pk": "ALBUM#a1", "sk": "PHOTO#p1"}], "LastEvaluatedKey": {"k": 1}},
+            {"Items": [{"pk": "ALBUM#a2", "sk": "PHOTO#p1"}]},
+        ]
+
+        result = await memberships.list_photo_album_ids("p1")
+
+    assert result == ["a1", "a2"]
+    assert mock_table.query.call_count == 2
+    assert mock_table.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"k": 1}
+
+
 async def test_get_membership_returns_item():
     fake = {"pk": "ALBUM#trip", "sk": "PHOTO#p1"}
     with patch.object(memberships, "memberships_table") as mock_table:

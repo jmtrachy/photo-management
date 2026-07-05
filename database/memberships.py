@@ -43,6 +43,35 @@ async def list_album_photo_ids(album_id: str) -> list[str]:
     return [m["sk"].split("#", 1)[1] for m in memberships]
 
 
+async def list_photo_album_ids(photo_id: str) -> list[str]:
+    """
+    Return every album_id a photo belongs to, via the ByPhoto index.
+
+    Follows pagination to completion.
+
+    :param photo_id: The photo to look up
+    :return: The album ids the photo is a member of (unordered)
+    """
+    album_ids: list[str] = []
+    last_key = None
+    while True:
+        kw: dict = {
+            "IndexName": "ByPhoto",
+            "KeyConditionExpression": Key("sk").eq(f"PHOTO#{photo_id}"),
+        }
+        if last_key:
+            kw["ExclusiveStartKey"] = last_key
+        resp = memberships_table.query(**kw)
+        for m in resp.get("Items", []):
+            pk = m["pk"]
+            if pk.startswith("ALBUM#"):
+                album_ids.append(pk.split("#", 1)[1])
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return album_ids
+
+
 async def get_membership(album_id: str, photo_id: str) -> dict | None:
     """
     Return the membership record tying a photo to an album, or None if the photo
