@@ -32,6 +32,12 @@ from database import tokens
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# Mangum emits a plain-text access line ("%s %s %s" -> "GET /path 302") on its
+# INFO logger, which isn't JSON-parseable and drops the query string. Silence it
+# (WARNING keeps Mangum's error logging) and emit our own structured access log
+# in the middleware below.
+logging.getLogger("mangum").setLevel(logging.WARNING)
+
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
@@ -173,16 +179,25 @@ app = FastAPI()
 
 
 @app.middleware("http")
-async def log_unhandled_errors(request: Request, call_next):
+async def log_requests(request: Request, call_next):
+    # Full request URI (path + query string), so it is queryable in CloudWatch.
+    uri = request.url.path
+    if request.url.query:
+        uri += "?" + request.url.query
+    start = time.perf_counter()
     try:
-        return await call_next(request)
+        response = await call_next(request)
     except Exception as exc:
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
         logger.error(
             json.dumps(
                 {
                     "event": "request_failed",
                     "method": request.method,
                     "path": request.url.path,
+                    "query": request.url.query,
+                    "uri": uri,
+                    "duration_ms": duration_ms,
                     "exception_type": type(exc).__name__,
                     "exception_message": str(exc),
                     "traceback": traceback.format_exc(),
@@ -192,6 +207,22 @@ async def log_unhandled_errors(request: Request, call_next):
         return JSONResponse(
             {"detail": "Internal Server Error"}, status_code=500
         )
+
+    duration_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.info(
+        json.dumps(
+            {
+                "event": "request",
+                "method": request.method,
+                "path": request.url.path,
+                "query": request.url.query,
+                "uri": uri,
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+            }
+        )
+    )
+    return response
 
 
 @app.middleware("http")
