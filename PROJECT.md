@@ -257,3 +257,35 @@ The default sort (most-recently-created-album first) doesn't always match what I
 #### Public collection page
 
 Story 10's public `/c/<slug>` view renders Listed albums in `position` order instead of `created_at` order. No public-side UI for reordering — admin-only feature.
+
+## Engineering / Infrastructure Considerations
+
+These are not product user stories — they're technical initiatives I'm ruminating on. Captured here for consideration; neither is designed yet.
+
+### A - Test coverage for `app.py` and breaking it into smaller route modules
+
+`app.py` has grown into a single very large file that holds every route (admin + public), request models, HTML-serving handlers, and assorted helpers. Two related goals:
+
+1. **Add unit test coverage to the app layer.** The `database/` modules are now fully extracted and each sits at 100% coverage (see `database/*.py` and `tests/database/`), but `app.py` itself has no tests — its handlers, routing/validation logic, and orchestration (S3 + DynamoDB module calls) are currently only exercised by hand. Bugs have slipped through merges precisely because nothing catches them (e.g. a stale reference in the photo-delete path that would have crashed at runtime). I'd like real coverage here — likely via FastAPI's `TestClient` with the `database` modules and boto3 clients mocked.
+
+2. **Break `app.py` into smaller pieces.** Rather than one massive file, split routes into a `routes/` subfolder (mirroring how data access lives under `database/`). `app.py` would become a thin shell that creates the FastAPI app, wires shared dependencies, and includes the route modules (FastAPI `APIRouter`s). A natural first cut is a **public vs. private (admin) split** — public share/viewer routes vs. authenticated admin routes — since they already differ in auth and audience. Could further subdivide by resource (albums, photos, collections, shares) if that reads better. Open questions: how to share the common setup (auth dependency, config, clients, HTML template loading) without re-creating circular imports; whether the `_run_coro_sync` bridge and the sync helpers move too.
+
+Precedent: the `database/` extraction (photos, memberships, shares, tokens, albums, collections, collection_albums) shows the pattern works well and keeps things testable — the route layer is the natural next target.
+
+### B - A dedicated Staging environment + integration tests
+
+Today there's effectively one environment (production at `photos.jamestrachy.com`). I want a separate **pre-production / Staging** environment to validate changes before they reach real users.
+
+1. **Staging environment.** Most likely hosted at `staging.photos.jamestrachy.com`, a full parallel deployment of the stack (its own Lambda, DynamoDB tables, S3 bucket, CloudFront distribution, DNS record) so it can be exercised destructively without touching production data. Needs a design decision on how the CDK stack is parameterized per-environment (stack naming, table/bucket names, the `photos`/`staging.photos` subdomain, and whether it reuses the shared platform cert/hosted zone from `../jt-com-infra`).
+
+2. **Automated integration tests against Staging on release.** Once Staging exists, I'd like a suite of automated end-to-end / integration tests that run against the deployed Staging environment as part of the release process — real HTTP against the real deployed stack (upload → derivative generation → album tagging → share link → public view → delete, etc.). This is the layer that would have caught the kind of deploy-time breakage that unit tests with mocked AWS can't (e.g. IAM permissions, S3 event wiring, DynamoDB GSIs). Open questions: test data seeding/teardown, an auth path for automated admin login, and whether these run on every deploy or gated to release.
+
+### C - S3 access should be in separate modules just like the database
+
+Today there is a bunch of S3 access performed in the app.py file, that should be moved out into its own module (or series of modules) under a new directory called file_storage
+
+### D - Make the app multi-tenant
+
+This will probably need to be its own project with a whole new set of requirements, but I'd like to start supporting making the app available for different
+accounts, meaning each account would have its own list of admin users and its own photos / albums / collections. This means keying data storage on some sort of
+account id, tying admin email addresses to accounts, potentially supporting different DNS, understanding cost per account, etc. 
