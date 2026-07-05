@@ -15,7 +15,6 @@ import zipfile
 from pathlib import Path
 
 import boto3
-from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -23,6 +22,8 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
 from database import albums as albums_db
+from database import collection_albums as collection_albums_db
+from database import collections as collections_db
 from database import memberships as memberships_db
 from database import photos as photos_db
 from database import shares
@@ -32,8 +33,6 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 COOKIE_SECRET_SSM_PARAM = os.environ["COOKIE_SECRET_SSM_PARAM"]
-COLLECTIONS_TABLE = os.environ["COLLECTIONS_TABLE"]
-COLLECTION_ALBUMS_TABLE = os.environ["COLLECTION_ALBUMS_TABLE"]
 PHOTOS_BUCKET = os.environ["PHOTOS_BUCKET"]
 FROM_EMAIL = os.environ["FROM_EMAIL"]
 BASE_URL = os.environ["BASE_URL"]
@@ -61,9 +60,6 @@ ssm = boto3.client("ssm")
 ses = boto3.client("ses")
 s3_client = boto3.client("s3")
 lambda_client = boto3.client("lambda")
-dynamodb = boto3.resource("dynamodb")
-collections_table = dynamodb.Table(COLLECTIONS_TABLE)
-collection_albums_table = dynamodb.Table(COLLECTION_ALBUMS_TABLE)
 
 ALBUM_TITLE_MAX_LEN = 200
 ADD_TO_ALBUM_MAX = 100
@@ -413,13 +409,12 @@ def _build_routing_context(target_album_id: str) -> dict:
     """Returns {"target_in_collections": bool, "subject_index": {token: {album_id, ...}},
     "album_titles": {album_id: title}, "unlisted_albums_by_id": {album_id: full_record}}.
     target_in_collections=False means no routing should happen (target album is not listed in any collection)."""
-    resp = collection_albums_table.query(
-        IndexName="ByAlbum",
-        KeyConditionExpression=Key("sk").eq(f"ALBUM#{target_album_id}"),
+    rows = _run_coro_sync(
+        collection_albums_db.list_album_collections(target_album_id)
     )
     listed_collection_ids = [
         r["pk"].split("#", 1)[1]
-        for r in resp.get("Items", [])
+        for r in rows
         if r.get("visibility", "listed") == "listed"
     ]
     if not listed_collection_ids:
@@ -820,7 +815,7 @@ async def create_collection(
         "view_count": 0,
         "share_id": share_id,
     }
-    collections_table.put_item(Item=item)
+    await collections_db.create_collection(item)
     logger.info(
         json.dumps(
             {
@@ -848,30 +843,15 @@ def _ensure_collection_share_id(item: dict) -> str:
         return share_id
     collection_id = item["collection_id"]
     share_id = _mint_collection_share(collection_id)
-    collections_table.update_item(
-        Key={"collection_id": collection_id},
-        UpdateExpression="SET share_id = :s",
-        ExpressionAttributeValues={":s": share_id},
-    )
+    _run_coro_sync(collections_db.set_share_id(collection_id, share_id))
     item["share_id"] = share_id
     return share_id
 
 
 def _collection_album_memberships(collection_id: str) -> list[dict]:
-    rows: list[dict] = []
-    last_key = None
-    while True:
-        kw: dict = {
-            "KeyConditionExpression": Key("pk").eq(f"COLLECTION#{collection_id}")
-        }
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = collection_albums_table.query(**kw)
-        rows.extend(resp.get("Items", []))
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-    return rows
+    return _run_coro_sync(
+        collection_albums_db.list_collection_memberships(collection_id)
+    )
 
 
 def _collection_album_ids(collection_id: str) -> list[str]:
@@ -883,13 +863,7 @@ def _collection_album_ids(collection_id: str) -> list[str]:
 
 @app.get("/api/collections")
 async def list_collections(_email: str = Depends(require_admin)):
-    resp = collections_table.query(
-        IndexName="ByCreatedAt",
-        KeyConditionExpression=Key("entity_type").eq("COLLECTION"),
-        ScanIndexForward=False,
-        Limit=COLLECTION_PAGE_LIMIT,
-    )
-    items = resp.get("Items", [])
+    items = await collections_db.list_recent_collections(COLLECTION_PAGE_LIMIT)
 
     collections = []
     for it in items:
@@ -914,10 +888,10 @@ def _ensure_card_share_id(collection_id: str, membership: dict) -> str:
         return share_id
     album_id = membership["sk"].split("#", 1)[1]
     share_id = _ensure_album_share(album_id)
-    collection_albums_table.update_item(
-        Key={"pk": f"COLLECTION#{collection_id}", "sk": membership["sk"]},
-        UpdateExpression="SET share_id = :s",
-        ExpressionAttributeValues={":s": share_id},
+    _run_coro_sync(
+        collection_albums_db.set_membership_share_id(
+            collection_id, album_id, share_id
+        )
     )
     membership["share_id"] = share_id
     return share_id
@@ -944,9 +918,7 @@ def _build_album_card(album: dict, share_id: str | None) -> dict:
 async def get_collection(
     collection_id: str, _email: str = Depends(require_admin)
 ):
-    item = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    item = await collections_db.get_collection(collection_id)
     if not item:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -1003,16 +975,10 @@ async def update_collection_title(
             status_code=400,
             detail=f"Title exceeds {COLLECTION_TITLE_MAX_LEN} characters",
         )
-    item = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    item = await collections_db.get_collection(collection_id)
     if not item:
         raise HTTPException(status_code=404, detail="Collection not found")
-    collections_table.update_item(
-        Key={"collection_id": collection_id},
-        UpdateExpression="SET title = :t, title_lower = :tl",
-        ExpressionAttributeValues={":t": title, ":tl": title.lower()},
-    )
+    await collections_db.set_title(collection_id, title)
     return {"collection_id": collection_id, "title": title}
 
 
@@ -1022,9 +988,7 @@ async def add_albums_to_collection(
     payload: AddAlbumsToCollectionRequest,
     _email: str = Depends(require_admin),
 ):
-    collection = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    collection = await collections_db.get_collection(collection_id)
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -1059,18 +1023,10 @@ async def add_albums_to_collection(
         )
 
     now = int(time.time())
-    added = 0
-    with collection_albums_table.batch_writer() as batch:
-        for aid in unique_ids:
-            batch.put_item(
-                Item={
-                    "pk": f"COLLECTION#{collection_id}",
-                    "sk": f"ALBUM#{aid}",
-                    "created_at": now,
-                    "visibility": payload.visibility,
-                }
-            )
-            added += 1
+    await collection_albums_db.add_memberships(
+        collection_id, unique_ids, payload.visibility, now
+    )
+    added = len(unique_ids)
 
     logger.info(
         json.dumps(
@@ -1102,24 +1058,18 @@ async def set_album_visibility(
             detail="visibility must be 'listed' or 'unlisted'",
         )
 
-    membership = collection_albums_table.get_item(
-        Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"}
-    ).get("Item")
+    membership = await collection_albums_db.get_membership(collection_id, album_id)
     if not membership:
         raise HTTPException(status_code=404, detail="Album not in collection")
 
     if payload.visibility == "listed":
         share_id = _ensure_card_share_id(collection_id, membership)
-        collection_albums_table.update_item(
-            Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"},
-            UpdateExpression="SET visibility = :v, share_id = :s",
-            ExpressionAttributeValues={":v": "listed", ":s": share_id},
+        await collection_albums_db.set_visibility(
+            collection_id, album_id, "listed", share_id
         )
     else:
-        collection_albums_table.update_item(
-            Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"},
-            UpdateExpression="SET visibility = :v",
-            ExpressionAttributeValues={":v": "unlisted"},
+        await collection_albums_db.set_visibility(
+            collection_id, album_id, "unlisted"
         )
 
     logger.info(
@@ -1145,15 +1095,11 @@ async def remove_album_from_collection(
     album_id: str,
     _email: str = Depends(require_admin),
 ):
-    collection = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    collection = await collections_db.get_collection(collection_id)
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    collection_albums_table.delete_item(
-        Key={"pk": f"COLLECTION#{collection_id}", "sk": f"ALBUM#{album_id}"}
-    )
+    await collection_albums_db.remove_membership(collection_id, album_id)
     logger.info(
         json.dumps(
             {
@@ -1358,9 +1304,7 @@ def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
     if not share or not _is_collection_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     collection_id = share["collection_id"]
-    collection = collections_table.get_item(
-        Key={"collection_id": collection_id}
-    ).get("Item")
+    collection = _run_coro_sync(collections_db.get_collection(collection_id))
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
     return share, collection
@@ -1395,11 +1339,7 @@ async def get_public_collection(share_id: str):
     _share, collection = _resolve_collection_share(share_id)
     collection_id = collection["collection_id"]
 
-    collections_table.update_item(
-        Key={"collection_id": collection_id},
-        UpdateExpression="ADD view_count :one",
-        ExpressionAttributeValues={":one": 1},
-    )
+    await collections_db.increment_view_count(collection_id)
 
     collection_memberships = _collection_album_memberships(collection_id)
     listed_memberships = [
@@ -1872,28 +1812,6 @@ class DeletePhotosRequest(BaseModel):
     photo_ids: list[str]
 
 
-def _album_ids_for_photo(photo_id: str) -> list[str]:
-    """Return every album_id this photo is a member of, via the ByPhoto index."""
-    album_ids: list[str] = []
-    last_key = None
-    while True:
-        kw: dict = {
-            "IndexName": "ByPhoto",
-            "KeyConditionExpression": Key("sk").eq(f"PHOTO#{photo_id}"),
-        }
-        if last_key:
-            kw["ExclusiveStartKey"] = last_key
-        resp = memberships_table.query(**kw)
-        for m in resp.get("Items", []):
-            pk = m["pk"]
-            if pk.startswith("ALBUM#"):
-                album_ids.append(pk.split("#", 1)[1])
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
-            break
-    return album_ids
-
-
 @app.delete("/api/photos")
 async def delete_photos(
     payload: DeletePhotosRequest, _email: str = Depends(require_admin)
@@ -1912,17 +1830,16 @@ async def delete_photos(
 
     # Resolve each photo's record (for its original S3 key) and album memberships
     # up front, before we start mutating anything.
-    photo_by_id = await photosdb.get_photos_by_ids(list(photo_ids))
-    albums_by_photo = {pid: _album_ids_for_photo(pid) for pid in photo_ids}
+    photo_by_id = await photos_db.get_photos_by_ids(list(photo_ids))
+    albums_by_photo = {
+        pid: await memberships_db.list_photo_album_ids(pid) for pid in photo_ids
+    }
     affected_albums = {aid for aids in albums_by_photo.values() for aid in aids}
 
     # 1. Remove every album membership for these photos.
-    with memberships_table.batch_writer() as batch:
-        for pid, aids in albums_by_photo.items():
-            for aid in aids:
-                batch.delete_item(
-                    Key={"pk": f"ALBUM#{aid}", "sk": f"PHOTO#{pid}"}
-                )
+    await memberships_db.remove_memberships(
+        [(aid, pid) for pid, aids in albums_by_photo.items() for aid in aids]
+    )
 
     # 2. Reassign covers for albums whose cover was one of the deleted photos.
     #    Done after membership removal so the replacement is never a deleted photo.
@@ -1945,7 +1862,7 @@ async def delete_photos(
             keys.append(photo["s3_key"])
         for key in keys:
             s3_client.delete_object(Bucket=PHOTOS_BUCKET, Key=key)
-        await photosdb.delete_photo(pid)
+        await photos_db.delete_photo(pid)
         if photo:
             deleted += 1
 
