@@ -1535,14 +1535,12 @@ def _run_coro_sync(coro):
 
     The share-zip build runs as a background task that, in Lambda, executes
     outside any event loop, so it cannot ``await`` the async data-access layer
-    directly. When no loop is running we use ``asyncio.run``; if a loop is
-    already running (the local/ECS fallback path), we run the coroutine on a
-    dedicated thread so we never call ``asyncio.run`` inside a running loop.
+    directly. We always run ``asyncio.run`` on a dedicated worker thread
+    rather than on the calling thread: ``asyncio.run`` explicitly resets that
+    thread's event loop to ``None`` on completion, and on Lambda's MainThread
+    that poisons ``Mangum``'s ``asyncio.get_event_loop()`` call on every
+    subsequent invocation in the same warm container.
     """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
 
