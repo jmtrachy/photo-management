@@ -194,7 +194,7 @@ class PhotoManagementStack(Stack):
                 ),
                 s3.LifecycleRule(
                     prefix="zips/",
-                    expiration=Duration.days(30),
+                    expiration=Duration.days(180),
                 ),
             ],
             removal_policy=RemovalPolicy.RETAIN,

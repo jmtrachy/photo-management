@@ -121,3 +121,28 @@ async def test_mark_zip_failed():
         UpdateExpression="SET zip_status = :s, zip_error = :e",
         ExpressionAttributeValues={":s": "failed", ":e": "boom"},
     )
+
+
+async def test_mark_album_zips_stale_only_touches_ready_shares():
+    items = [
+        {"share_id": "a", "zip_status": "ready"},
+        {"share_id": "b", "zip_status": "pending"},
+        {"share_id": "c", "zip_status": "failed"},
+        {"share_id": "d", "zip_status": "ready"},
+    ]
+    with patch.object(shares, "shares_table") as mock_table:
+        mock_table.scan.return_value = {"Items": items}
+
+        await shares.mark_album_zips_stale("trip")
+
+    assert mock_table.update_item.call_count == 2
+    mock_table.update_item.assert_any_call(
+        Key={"share_id": "a"},
+        UpdateExpression="SET zip_status = :s",
+        ExpressionAttributeValues={":s": "stale"},
+    )
+    mock_table.update_item.assert_any_call(
+        Key={"share_id": "d"},
+        UpdateExpression="SET zip_status = :s",
+        ExpressionAttributeValues={":s": "stale"},
+    )
