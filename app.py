@@ -436,13 +436,11 @@ def _parse_match_token(photo_id: str) -> tuple[str, bool]:
     return token.lower(), had_z
 
 
-def _build_routing_context(target_album_id: str) -> dict:
+async def _build_routing_context(target_album_id: str) -> dict:
     """Returns {"target_in_collections": bool, "subject_index": {token: {album_id, ...}},
     "album_titles": {album_id: title}, "unlisted_albums_by_id": {album_id: full_record}}.
     target_in_collections=False means no routing should happen (target album is not listed in any collection)."""
-    rows = _run_coro_sync(
-        collection_albums_db.list_album_collections(target_album_id)
-    )
+    rows = await collection_albums_db.list_album_collections(target_album_id)
     listed_collection_ids = [
         r["pk"].split("#", 1)[1]
         for r in rows
@@ -458,13 +456,11 @@ def _build_routing_context(target_album_id: str) -> dict:
 
     unlisted_album_ids: set[str] = set()
     for cid in listed_collection_ids:
-        for m in _collection_album_memberships(cid):
+        for m in await _collection_album_memberships(cid):
             if m.get("visibility", "listed") == "unlisted":
                 unlisted_album_ids.add(m["sk"].split("#", 1)[1])
 
-    album_by_id = _run_coro_sync(
-        albums_db.batch_get_albums(list(unlisted_album_ids))
-    )
+    album_by_id = await albums_db.batch_get_albums(list(unlisted_album_ids))
 
     subject_index: dict[str, set[str]] = {}
     album_titles: dict[str, str] = {}
@@ -505,7 +501,7 @@ async def add_photos_to_album(
 
     photo_by_id = await photos_db.get_photos_by_ids(payload.photo_ids)
 
-    routing = _build_routing_context(album_id)
+    routing = await _build_routing_context(album_id)
     routing_active = routing["target_in_collections"]
     subject_index = routing["subject_index"]
     routing_album_titles = dict(routing["album_titles"])
@@ -836,7 +832,7 @@ async def create_collection(
 
     collection_id = secrets.token_hex(8)
     now = int(time.time())
-    share_id = _mint_collection_share(collection_id)
+    share_id = await _mint_collection_share(collection_id)
     item = {
         "collection_id": collection_id,
         "entity_type": "COLLECTION",
@@ -868,27 +864,25 @@ async def create_collection(
     }
 
 
-def _ensure_collection_share_id(item: dict) -> str:
+async def _ensure_collection_share_id(item: dict) -> str:
     share_id = item.get("share_id")
     if share_id:
         return share_id
     collection_id = item["collection_id"]
-    share_id = _mint_collection_share(collection_id)
-    _run_coro_sync(collections_db.set_share_id(collection_id, share_id))
+    share_id = await _mint_collection_share(collection_id)
+    await collections_db.set_share_id(collection_id, share_id)
     item["share_id"] = share_id
     return share_id
 
 
-def _collection_album_memberships(collection_id: str) -> list[dict]:
-    return _run_coro_sync(
-        collection_albums_db.list_collection_memberships(collection_id)
-    )
+async def _collection_album_memberships(collection_id: str) -> list[dict]:
+    return await collection_albums_db.list_collection_memberships(collection_id)
 
 
-def _collection_album_ids(collection_id: str) -> list[str]:
+async def _collection_album_ids(collection_id: str) -> list[str]:
     return [
         r["sk"].split("#", 1)[1]
-        for r in _collection_album_memberships(collection_id)
+        for r in await _collection_album_memberships(collection_id)
     ]
 
 
@@ -898,14 +892,14 @@ async def list_collections(_email: str = Depends(require_admin)):
 
     collections = []
     for it in items:
-        share_id = _ensure_collection_share_id(it)
+        share_id = await _ensure_collection_share_id(it)
         collections.append(
             {
                 "collection_id": it["collection_id"],
                 "title": it.get("title", ""),
                 "created_at": int(it.get("created_at", 0)),
                 "view_count": int(it.get("view_count", 0)),
-                "album_count": len(_collection_album_ids(it["collection_id"])),
+                "album_count": len(await _collection_album_ids(it["collection_id"])),
                 "share_id": share_id,
                 "public_url": collection_public_url(share_id),
             }
@@ -913,16 +907,14 @@ async def list_collections(_email: str = Depends(require_admin)):
     return {"collections": collections, "cursor": None}
 
 
-def _ensure_card_share_id(collection_id: str, membership: dict) -> str:
+async def _ensure_card_share_id(collection_id: str, membership: dict) -> str:
     share_id = membership.get("share_id")
     if share_id:
         return share_id
     album_id = membership["sk"].split("#", 1)[1]
-    share_id = _ensure_album_share(album_id)
-    _run_coro_sync(
-        collection_albums_db.set_membership_share_id(
-            collection_id, album_id, share_id
-        )
+    share_id = await _ensure_album_share(album_id)
+    await collection_albums_db.set_membership_share_id(
+        collection_id, album_id, share_id
     )
     membership["share_id"] = share_id
     return share_id
@@ -953,9 +945,9 @@ async def get_collection(
     if not item:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    share_id = _ensure_collection_share_id(item)
+    share_id = await _ensure_collection_share_id(item)
 
-    collection_memberships = _collection_album_memberships(collection_id)
+    collection_memberships = await _collection_album_memberships(collection_id)
     album_ids = [m["sk"].split("#", 1)[1] for m in collection_memberships]
     album_by_id = await albums_db.batch_get_albums(album_ids)
 
@@ -968,7 +960,7 @@ async def get_collection(
             continue
         visibility = m.get("visibility", "listed")
         card_share_id = (
-            _ensure_card_share_id(collection_id, m) if visibility == "listed"
+            await _ensure_card_share_id(collection_id, m) if visibility == "listed"
             else m.get("share_id")
         )
         card = _build_album_card(album, card_share_id)
@@ -1094,7 +1086,7 @@ async def set_album_visibility(
         raise HTTPException(status_code=404, detail="Album not in collection")
 
     if payload.visibility == "listed":
-        share_id = _ensure_card_share_id(collection_id, membership)
+        share_id = await _ensure_card_share_id(collection_id, membership)
         await collection_albums_db.set_visibility(
             collection_id, album_id, "listed", share_id
         )
@@ -1163,8 +1155,8 @@ def _is_collection_share(share: dict) -> bool:
     return share.get("entity_type") == "collection"
 
 
-def _newest_album_share_for(album_id: str) -> dict | None:
-    items = _run_coro_sync(shares.scan_album_shares(album_id))
+async def _newest_album_share_for(album_id: str) -> dict | None:
+    items = await shares.scan_album_shares(album_id)
     items = [s for s in items if _is_album_share(s)]
     if not items:
         return None
@@ -1172,18 +1164,18 @@ def _newest_album_share_for(album_id: str) -> dict | None:
     return items[0]
 
 
-def _mint_album_share(album_id: str) -> str:
+async def _mint_album_share(album_id: str) -> str:
     now = int(time.time())
     for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
         share_id = generate_share_slug()
         try:
-            _run_coro_sync(shares.create_album_share(share_id, album_id, now))
+            await shares.create_album_share(share_id, album_id, now)
             logger.info(
                 json.dumps(
                     {"event": "share_created", "album_id": album_id, "share_id": share_id}
                 )
             )
-            _trigger_share_zip_build(share_id, album_id)
+            await _trigger_share_zip_build(share_id, album_id)
             return share_id
         except ClientError as e:
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
@@ -1191,21 +1183,19 @@ def _mint_album_share(album_id: str) -> str:
     raise HTTPException(status_code=500, detail="Could not generate unique share id")
 
 
-def _ensure_album_share(album_id: str) -> str:
-    existing = _newest_album_share_for(album_id)
+async def _ensure_album_share(album_id: str) -> str:
+    existing = await _newest_album_share_for(album_id)
     if existing:
         return existing["share_id"]
-    return _mint_album_share(album_id)
+    return await _mint_album_share(album_id)
 
 
-def _mint_collection_share(collection_id: str) -> str:
+async def _mint_collection_share(collection_id: str) -> str:
     now = int(time.time())
     for _ in range(SHARE_SLUG_MAX_ATTEMPTS):
         share_id = generate_share_slug()
         try:
-            _run_coro_sync(
-                shares.create_collection_share(share_id, collection_id, now)
-            )
+            await shares.create_collection_share(share_id, collection_id, now)
             logger.info(
                 json.dumps(
                     {
@@ -1232,7 +1222,7 @@ async def create_album_share(album_id: str, _email: str = Depends(require_admin)
     if not album:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    share_id = _mint_album_share(album_id)
+    share_id = await _mint_album_share(album_id)
     share = await shares.get_share(share_id) or {}
 
     return {
@@ -1330,12 +1320,12 @@ def _render_public_collection_head_meta(
     )
 
 
-def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
-    share = _run_coro_sync(shares.get_share(share_id))
+async def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
+    share = await shares.get_share(share_id)
     if not share or not _is_collection_share(share):
         raise HTTPException(status_code=404, detail="Share not found")
     collection_id = share["collection_id"]
-    collection = _run_coro_sync(collections_db.get_collection(collection_id))
+    collection = await collections_db.get_collection(collection_id)
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
     return share, collection
@@ -1343,9 +1333,9 @@ def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
 
 @app.get("/c/{share_id}", response_class=HTMLResponse)
 async def public_collection_page(share_id: str):
-    _share, collection = _resolve_collection_share(share_id)
+    _share, collection = await _resolve_collection_share(share_id)
     cover_photo_id: str | None = None
-    collection_memberships = _collection_album_memberships(collection["collection_id"])
+    collection_memberships = await _collection_album_memberships(collection["collection_id"])
     listed_album_ids = [
         m["sk"].split("#", 1)[1]
         for m in collection_memberships
@@ -1367,12 +1357,12 @@ async def public_collection_page(share_id: str):
 
 @app.get("/api/public/collections/{share_id}")
 async def get_public_collection(share_id: str):
-    _share, collection = _resolve_collection_share(share_id)
+    _share, collection = await _resolve_collection_share(share_id)
     collection_id = collection["collection_id"]
 
     await collections_db.increment_view_count(collection_id)
 
-    collection_memberships = _collection_album_memberships(collection_id)
+    collection_memberships = await _collection_album_memberships(collection_id)
     listed_memberships = [
         m for m in collection_memberships if m.get("visibility", "listed") == "listed"
     ]
@@ -1385,7 +1375,7 @@ async def get_public_collection(share_id: str):
         album = album_by_id.get(aid)
         if not album:
             continue
-        card_share_id = _ensure_card_share_id(collection_id, m)
+        card_share_id = await _ensure_card_share_id(collection_id, m)
         cards.append(_build_album_card(album, card_share_id))
 
     cards.sort(key=lambda c: c["event_date"] or c["created_at"], reverse=True)
@@ -1462,7 +1452,7 @@ def _zip_exists(zip_key: str) -> bool:
         raise
 
 
-def _trigger_share_zip_build(share_id: str, album_id: str) -> None:
+async def _trigger_share_zip_build(share_id: str, album_id: str) -> None:
     fn_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
     payload = {"task": "build_share_zip", "share_id": share_id, "album_id": album_id}
     if not fn_name:
@@ -1475,7 +1465,7 @@ def _trigger_share_zip_build(share_id: str, album_id: str) -> None:
                 }
             )
         )
-        _build_share_zip_task(payload)
+        await _build_share_zip_task(payload)
         return
     lambda_client.invoke(
         FunctionName=fn_name,
@@ -1493,14 +1483,14 @@ def _trigger_share_zip_build(share_id: str, album_id: str) -> None:
     )
 
 
-def _build_share_zip_task(event: dict) -> dict:
+async def _build_share_zip_task(event: dict) -> dict:
     share_id = event["share_id"]
     album_id = event["album_id"]
     zip_key = _share_zip_key(share_id)
     try:
-        included = _build_album_zip(album_id, zip_key)
+        included = await _build_album_zip(album_id, zip_key)
     except Exception as exc:
-        _run_coro_sync(shares.mark_zip_failed(share_id, str(exc)[:500]))
+        await shares.mark_zip_failed(share_id, str(exc)[:500])
         logger.error(
             json.dumps(
                 {
@@ -1515,7 +1505,7 @@ def _build_share_zip_task(event: dict) -> dict:
         )
         raise
 
-    _run_coro_sync(shares.mark_zip_ready(share_id, included))
+    await shares.mark_zip_ready(share_id, included)
     logger.info(
         json.dumps(
             {
@@ -1545,12 +1535,12 @@ def _run_coro_sync(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
-def _build_album_zip(album_id: str, zip_key: str) -> int:
-    photo_ids = _run_coro_sync(memberships_db.list_album_photo_ids(album_id))
+async def _build_album_zip(album_id: str, zip_key: str) -> int:
+    photo_ids = await memberships_db.list_album_photo_ids(album_id)
     if not photo_ids:
         return 0
 
-    photo_by_id = _run_coro_sync(photos_db.get_photos_by_ids(photo_ids))
+    photo_by_id = await photos_db.get_photos_by_ids(photo_ids)
 
     included = 0
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as tmp:
@@ -1590,7 +1580,7 @@ async def download_public_album(share_id: str):
 
     if zip_status == "failed" or (zip_status != "ready" and not zip_present):
         await shares.mark_zip_pending(share_id)
-        _trigger_share_zip_build(share_id, album_id)
+        await _trigger_share_zip_build(share_id, album_id)
         return JSONResponse({"status": "pending"}, status_code=202)
 
     await albums_db.increment_download_count(album_id)
@@ -2004,5 +1994,5 @@ _mangum_handler = Mangum(app, lifespan="off")
 
 def handler(event, context):
     if isinstance(event, dict) and event.get("task") == "build_share_zip":
-        return _build_share_zip_task(event)
+        return _run_coro_sync(_build_share_zip_task(event))
     return _mangum_handler(event, context)
