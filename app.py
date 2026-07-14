@@ -569,6 +569,9 @@ async def add_photos_to_album(
 
     await memberships_db.add_memberships(new_memberships)
 
+    for dest_id in landed_new_by_album:
+        await shares.mark_album_zips_stale(dest_id)
+
     added = len(landed_new_by_album.get(album_id, []))
 
     # Auto-pick a cover for each destination album that received new photos
@@ -644,6 +647,8 @@ async def remove_photos_from_album(
         [(album_id, pid) for pid in removed_set]
     )
     removed = len(removed_set)
+
+    await shares.mark_album_zips_stale(album_id)
 
     new_cover_photo_id = album.get("cover_photo_id")
     if new_cover_photo_id in removed_set:
@@ -1578,7 +1583,7 @@ async def download_public_album(share_id: str):
     if zip_status == "pending":
         return JSONResponse({"status": "pending"}, status_code=202)
 
-    if zip_status == "failed" or (zip_status != "ready" and not zip_present):
+    if zip_status in ("failed", "stale") or not zip_present:
         await shares.mark_zip_pending(share_id)
         await _trigger_share_zip_build(share_id, album_id)
         return JSONResponse({"status": "pending"}, status_code=202)

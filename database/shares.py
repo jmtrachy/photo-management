@@ -128,3 +128,18 @@ async def mark_zip_failed(share_id: str, error: str) -> None:
         UpdateExpression="SET zip_status = :s, zip_error = :e",
         ExpressionAttributeValues={":s": "failed", ":e": error},
     )
+
+
+async def mark_album_zips_stale(album_id: str) -> None:
+    """
+    Mark every already-built zip among an album's shares as stale, so the next
+    download rebuilds it. Shares whose zip is still pending or failed are left
+    alone since they'll already (re)build against current membership.
+    """
+    for s in await scan_album_shares(album_id):
+        if s.get("zip_status") == "ready":
+            shares_table.update_item(
+                Key={"share_id": s["share_id"]},
+                UpdateExpression="SET zip_status = :s",
+                ExpressionAttributeValues={":s": "stale"},
+            )
