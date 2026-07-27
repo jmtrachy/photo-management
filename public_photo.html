@@ -85,7 +85,9 @@
       flex: 0 0 auto;
       padding: 0.6rem 1rem 0.8rem;
       display: flex;
+      align-items: center;
       justify-content: center;
+      gap: 0.5rem;
     }
     .download-link {
       color: var(--accent);
@@ -94,6 +96,14 @@
     }
     .download-link:hover { text-decoration: underline; }
     .download-link[hidden] { display: none; }
+    .dot-sep { color: var(--muted); font-size: 0.9rem; }
+    #download-link[hidden] + .dot-sep { display: none; }
+    .ig-link {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    .ig-link:hover { color: var(--fg); text-decoration: underline; }
 
     .nav-btn {
       position: absolute;
@@ -146,6 +156,8 @@
     </div>
     <div class="download-row">
       <a id="download-link" class="download-link" href="#" hidden>Download Full Res image</a>
+      <span class="dot-sep" aria-hidden="true">&middot;</span>
+      <a class="ig-link" href="https://www.instagram.com/jmtrachy/" target="_blank" rel="noopener noreferrer">IG: @jmtrachy</a>
     </div>
   </main>
   <script>

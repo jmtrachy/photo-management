@@ -969,6 +969,8 @@ async def get_collection(
             else m.get("share_id")
         )
         card = _build_album_card(album, card_share_id)
+        card["view_count"] = int(album.get("view_count", 0))
+        card["download_count"] = int(album.get("download_count", 0))
         if visibility == "unlisted":
             unlisted_albums.append(card)
         else:
