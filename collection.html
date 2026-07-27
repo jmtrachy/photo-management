@@ -310,6 +310,11 @@
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
+    .album-stats {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
     .radio {
       position: absolute;
       top: 0.5rem;
@@ -763,6 +768,12 @@
         date.textContent = new Date(displayDate * 1000).toISOString().slice(0, 10);
         meta.appendChild(date);
       }
+      const stats = document.createElement("div");
+      stats.className = "album-stats";
+      const views = pluralize(album.view_count ?? 0, "view");
+      const downloads = pluralize(album.download_count ?? 0, "download");
+      stats.textContent = `${views} · ${downloads}`;
+      meta.appendChild(stats);
       link.appendChild(meta);
       card.appendChild(link);
 

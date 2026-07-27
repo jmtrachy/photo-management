@@ -106,6 +106,17 @@
       text-align: center;
     }
     .error { color: #b03030; font-style: normal; }
+
+    .site-footer {
+      padding: 1rem 2rem 2rem;
+      text-align: center;
+    }
+    .ig-link {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    .ig-link:hover { color: var(--fg); text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -122,6 +133,9 @@
     <div id="empty" class="empty" hidden>No photos in this album yet.</div>
     <div id="grid" class="grid" hidden></div>
   </main>
+  <footer class="site-footer">
+    <a class="ig-link" href="https://www.instagram.com/jmtrachy/" target="_blank" rel="noopener noreferrer">IG: @jmtrachy</a>
+  </footer>
   <script>
     const shareId = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop());
     const titleEl = document.getElementById("album-title");
