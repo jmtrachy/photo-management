@@ -310,6 +310,10 @@ class SetEventDateRequest(BaseModel):
     event_date: int | None = None
 
 
+class SetSortOrderRequest(BaseModel):
+    sort_order: str
+
+
 @app.get("/api/albums")
 async def list_albums(_email: str = Depends(require_admin)):
     items = await albums_db.list_recent_albums(ALBUM_PAGE_LIMIT)
@@ -332,13 +336,20 @@ async def list_albums(_email: str = Depends(require_admin)):
     return {"albums": albums, "cursor": None}
 
 
+def _album_photos_reverse(album: dict) -> bool:
+    """Newest-first (True) unless the album's own display preference is 'asc'."""
+    return album.get("sort_order", "asc") == "desc"
+
+
 @app.get("/api/albums/{album_id}")
 async def get_album(album_id: str, _email: str = Depends(require_admin)):
     item = await albums_db.get_album(album_id)
     if not item:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo_ids = await memberships_db.list_album_photo_ids(album_id)
+    photo_ids = await memberships_db.list_album_photo_ids(
+        album_id, reverse=_album_photos_reverse(item)
+    )
 
     photo_by_id = await photos_db.get_photos_by_ids(photo_ids)
 
@@ -372,6 +383,7 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
         "cover_photo_id": cover_photo_id,
         "cover_thumb_url": cover_thumb_url,
         "subjects": list(item.get("subjects") or []),
+        "sort_order": item.get("sort_order", "asc"),
         "photos": photos,
     }
 
@@ -782,6 +794,24 @@ async def set_album_event_date(
     else:
         await albums_db.remove_event_date(album_id)
     return {"album_id": album_id, "event_date": payload.event_date}
+
+
+@app.put("/api/albums/{album_id}/sort-order")
+async def set_album_sort_order(
+    album_id: str,
+    payload: SetSortOrderRequest,
+    _email: str = Depends(require_admin),
+):
+    if payload.sort_order not in ("asc", "desc"):
+        raise HTTPException(
+            status_code=400, detail="sort_order must be 'asc' or 'desc'"
+        )
+    album = await albums_db.get_album(album_id)
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    await albums_db.set_sort_order(album_id, payload.sort_order)
+    return {"album_id": album_id, "sort_order": payload.sort_order}
 
 
 @app.post("/api/albums/{album_id}/reset-counts")
@@ -1405,7 +1435,9 @@ async def get_public_album(share_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    photo_ids = await memberships_db.list_album_photo_ids(album_id)
+    photo_ids = await memberships_db.list_album_photo_ids(
+        album_id, reverse=_album_photos_reverse(item)
+    )
 
     photos = []
     for pid in photo_ids:
