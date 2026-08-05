@@ -1447,6 +1447,7 @@ async def get_public_album(share_id: str):
         "album_id": album_id,
         "title": item.get("title", ""),
         "event_date": item.get("event_date"),
+        "sort_order": item.get("sort_order", "asc"),
         "photos": photos,
     }
 

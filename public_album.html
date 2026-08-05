@@ -61,6 +61,17 @@
       cursor: progress;
     }
     .download-all-btn[hidden] { display: none; }
+    .sort-order-select {
+      flex: 0 0 auto;
+      padding: 0.45rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      background: var(--card);
+      color: var(--fg);
+    }
+    .sort-order-select[hidden] { display: none; }
     .download-error {
       flex-basis: 100%;
       color: #b03030;
@@ -126,6 +137,10 @@
       <div id="album-meta" class="meta"></div>
     </div>
     <button id="download-all-btn" class="download-all-btn" type="button" hidden>Download all</button>
+    <select id="sort-order-select" class="sort-order-select" hidden>
+      <option value="asc">Oldest first</option>
+      <option value="desc">Newest first</option>
+    </select>
     <div id="download-error" class="download-error" hidden></div>
   </div>
   <main>
@@ -145,6 +160,9 @@
     const loading = document.getElementById("loading");
     const downloadBtn = document.getElementById("download-all-btn");
     const downloadError = document.getElementById("download-error");
+    const sortOrderSelect = document.getElementById("sort-order-select");
+
+    let currentPhotos = [];
 
     function pluralize(n, word) { return `${n} ${word}${n === 1 ? "" : "s"}`; }
 
@@ -162,6 +180,16 @@
       card.appendChild(thumb);
       return card;
     }
+
+    function renderGrid() {
+      grid.innerHTML = "";
+      for (const p of currentPhotos) grid.appendChild(buildPhotoCard(p));
+    }
+
+    sortOrderSelect.addEventListener("change", () => {
+      currentPhotos.reverse();
+      renderGrid();
+    });
 
     function viewBeacon() {
       fetch(
@@ -187,16 +215,18 @@
         metaEl.textContent = parts.join(" · ");
 
         loading.hidden = true;
-        grid.innerHTML = "";
-        if (!data.photos.length) {
+        currentPhotos = data.photos;
+        if (!currentPhotos.length) {
           empty.hidden = false;
           grid.hidden = true;
           return;
         }
         empty.hidden = true;
         grid.hidden = false;
-        for (const p of data.photos) grid.appendChild(buildPhotoCard(p));
+        sortOrderSelect.value = data.sort_order || "asc";
+        renderGrid();
         downloadBtn.hidden = false;
+        sortOrderSelect.hidden = false;
       } catch (err) {
         loading.className = "error";
         loading.textContent = `Failed to load album: ${err.message}`;

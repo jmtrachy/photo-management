@@ -5,6 +5,7 @@ from aws_cdk import (
     CfnOutput,
     Duration,
     RemovalPolicy,
+    Size,
     Stack,
     aws_apigateway as apigw,
     aws_certificatemanager as acm,
@@ -240,6 +241,7 @@ class PhotoManagementStack(Stack):
             architecture=arch,
             memory_size=1024,
             timeout=Duration.minutes(5),
+            ephemeral_storage_size=Size.mebibytes(4096),
             environment={
                 "COOKIE_SECRET_SSM_PARAM": COOKIE_SECRET_SSM_PARAM,
                 "LOGIN_TOKENS_TABLE": login_tokens_table.table_name,
