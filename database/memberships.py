@@ -19,14 +19,20 @@ _BATCH_GET_CHUNK = 100
 # module owns the ALBUM#/PHOTO# key encoding.
 
 
-async def list_album_photo_ids(album_id: str) -> list[str]:
+async def list_album_photo_ids(album_id: str, *, reverse: bool = True) -> list[str]:
     """
-    Return every photo_id in an album, ordered by taken_at descending.
+    Return every photo_id in an album, ordered by taken_at.
 
     Follows pagination to completion.
 
     :param album_id: The album to list
-    :return: Ordered list of photo ids (newest first)
+    :param reverse: True for newest-first (the historical default, used by
+        callers like cover-selection that always want "the newest photo"
+        regardless of an album's own display-order preference), False for
+        oldest-first. Callers rendering an album's display order should pass
+        the album's stored preference explicitly rather than rely on this
+        default.
+    :return: Ordered list of photo ids
     """
     memberships: list[dict] = []
     last_key = None
@@ -39,7 +45,7 @@ async def list_album_photo_ids(album_id: str) -> list[str]:
         last_key = resp.get("LastEvaluatedKey")
         if not last_key:
             break
-    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=True)
+    memberships.sort(key=lambda m: int(m.get("taken_at", 0)), reverse=reverse)
     return [m["sk"].split("#", 1)[1] for m in memberships]
 
 

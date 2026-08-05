@@ -159,6 +159,16 @@ async def test_remove_event_date(mock_dynamo_table):
     )
 
 
+async def test_set_sort_order(mock_dynamo_table):
+    await albums.set_sort_order("a1", "desc")
+
+    mock_dynamo_table.update_item.assert_called_once_with(
+        Key={"album_id": "a1"},
+        UpdateExpression="SET sort_order = :s",
+        ExpressionAttributeValues={":s": "desc"},
+    )
+
+
 async def test_reset_counts(mock_dynamo_table):
     await albums.reset_counts("a1")
 

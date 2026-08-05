@@ -25,6 +25,20 @@ async def test_list_album_photo_ids_orders_by_taken_at_desc():
     )
 
 
+async def test_list_album_photo_ids_reverse_false_orders_ascending():
+    items = [
+        {"sk": "PHOTO#a", "taken_at": 100},
+        {"sk": "PHOTO#b", "taken_at": 300},
+        {"sk": "PHOTO#c", "taken_at": 200},
+    ]
+    with patch.object(memberships, "memberships_table") as mock_table:
+        mock_table.query.return_value = {"Items": items}
+
+        result = await memberships.list_album_photo_ids("trip", reverse=False)
+
+    assert result == ["a", "c", "b"]
+
+
 async def test_list_album_photo_ids_follows_pagination():
     with patch.object(memberships, "memberships_table") as mock_table:
         mock_table.query.side_effect = [

@@ -112,6 +112,15 @@ async def remove_event_date(album_id: str) -> None:
     )
 
 
+async def set_sort_order(album_id: str, sort_order: str) -> None:
+    """Set an album's default photo display order ("asc" or "desc")."""
+    albums_table.update_item(
+        Key={"album_id": album_id},
+        UpdateExpression="SET sort_order = :s",
+        ExpressionAttributeValues={":s": sort_order},
+    )
+
+
 async def reset_counts(album_id: str) -> None:
     """Reset an album's view and download counts to zero."""
     albums_table.update_item(

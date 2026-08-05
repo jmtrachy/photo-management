@@ -873,6 +873,13 @@
         <input id="event-date-input" class="sidebar-filter" type="date">
       </div>
       <div class="sidebar-section">
+        <div class="sidebar-label">Photo order</div>
+        <select id="sort-order-select" class="sidebar-filter">
+          <option value="asc">Oldest first</option>
+          <option value="desc">Newest first</option>
+        </select>
+      </div>
+      <div class="sidebar-section">
         <div class="sidebar-label">Stats</div>
         <div id="album-meta" class="album-stats"></div>
       </div>
@@ -970,6 +977,21 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       } catch (err) {
         statusEl.textContent = `Failed to save event date: ${err.message}`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    });
+    const sortOrderSelect = document.getElementById("sort-order-select");
+    sortOrderSelect.addEventListener("change", async () => {
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/sort-order`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({sort_order: sortOrderSelect.value}),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        await load();
+      } catch (err) {
+        statusEl.textContent = `Failed to save photo order: ${err.message}`;
         setTimeout(() => { statusEl.textContent = ""; }, 4000);
       }
     });
@@ -1512,6 +1534,7 @@
         } else {
           eventDateInput.value = "";
         }
+        sortOrderSelect.value = data.sort_order || "asc";
         renderMeta(data);
 
         loading.hidden = true;
