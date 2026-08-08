@@ -315,6 +315,18 @@
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
+    .cover-badge {
+      position: absolute;
+      top: 0.5rem;
+      left: 0.5rem;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      letter-spacing: 0.02em;
+      z-index: 2;
+    }
     .radio {
       position: absolute;
       top: 0.5rem;
@@ -535,6 +547,7 @@
         <div class="select-mode" id="select-mode-bar">
           <span class="select-count"><strong id="select-count">0</strong> selected</span>
           <span class="select-section-label" id="select-section-label">in Listed</span>
+          <button id="set-cover-btn" class="new-btn" type="button" disabled>Set as cover</button>
           <button id="action-primary-btn" class="new-btn" type="button">Unlist</button>
           <button id="action-remove-btn" class="new-btn danger" type="button">Remove</button>
           <button id="cancel-select-btn" class="link-btn" type="button">Cancel</button>
@@ -663,6 +676,7 @@
 
     const selectCountEl = document.getElementById("select-count");
     const selectSectionLabel = document.getElementById("select-section-label");
+    const setCoverBtn = document.getElementById("set-cover-btn");
     const actionPrimaryBtn = document.getElementById("action-primary-btn");
     const actionRemoveBtn = document.getElementById("action-remove-btn");
     const cancelSelectBtn = document.getElementById("cancel-select-btn");
@@ -680,6 +694,7 @@
     let memberAlbumIds = new Set();
     let pickerAlbums = [];
     let pickerSelected = new Set();
+    let collectionCoverAlbumId = null;
 
     let activeSection = null;
     const selected = new Set();
@@ -703,6 +718,7 @@
         activeSection === "listed" ? "Unlist" : "List";
       actionPrimaryBtn.disabled = selected.size === 0;
       actionRemoveBtn.disabled = selected.size === 0;
+      setCoverBtn.disabled = selected.size !== 1;
     }
 
     function toggleSelection(albumId, section) {
@@ -753,6 +769,14 @@
         cover.appendChild(img);
       }
       link.appendChild(cover);
+      card.appendChild(link);
+
+      if (album.album_id === collectionCoverAlbumId) {
+        const badge = document.createElement("span");
+        badge.className = "cover-badge";
+        badge.textContent = "★ Cover";
+        card.appendChild(badge);
+      }
 
       const meta = document.createElement("div");
       meta.className = "album-meta";
@@ -775,7 +799,6 @@
       stats.textContent = `${views} · ${downloads}`;
       meta.appendChild(stats);
       link.appendChild(meta);
-      card.appendChild(link);
 
       const radio = document.createElement("div");
       radio.className = "radio";
@@ -830,6 +853,7 @@
         memberAlbumIds = new Set(
           [...listed, ...unlisted].map(a => a.album_id)
         );
+        collectionCoverAlbumId = data.cover_album_id || null;
         loading.hidden = true;
         if (!listed.length && !unlisted.length) {
           empty.hidden = false;
@@ -888,6 +912,30 @@
       } catch (err) {
         statusEl.textContent = `Update failed: ${err.message}`;
         updateSelectBar();
+      }
+    });
+
+    setCoverBtn.addEventListener("click", async () => {
+      if (selected.size !== 1) return;
+      const albumId = Array.from(selected)[0];
+      setCoverBtn.disabled = true;
+      try {
+        const resp = await fetch(
+          `/api/collections/${encodeURIComponent(collectionId)}/cover`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ album_id: albumId }),
+          }
+        );
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        exitSelectMode();
+        statusEl.textContent = "Cover updated.";
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        await refresh();
+      } catch (err) {
+        statusEl.textContent = `Set cover failed: ${err.message}`;
+        setCoverBtn.disabled = false;
       }
     });
 

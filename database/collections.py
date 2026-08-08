@@ -57,6 +57,23 @@ async def set_title(collection_id: str, title: str) -> None:
     )
 
 
+async def set_cover_album_id(collection_id: str, cover_album_id: str) -> None:
+    """Set which member album's cover photo represents this collection."""
+    collections_table.update_item(
+        Key={"collection_id": collection_id},
+        UpdateExpression="SET cover_album_id = :a",
+        ExpressionAttributeValues={":a": cover_album_id},
+    )
+
+
+async def remove_cover_album_id(collection_id: str) -> None:
+    """Clear a collection's explicit cover album selection."""
+    collections_table.update_item(
+        Key={"collection_id": collection_id},
+        UpdateExpression="REMOVE cover_album_id",
+    )
+
+
 async def increment_view_count(collection_id: str) -> None:
     """Atomically increment a collection's view count by one."""
     collections_table.update_item(
