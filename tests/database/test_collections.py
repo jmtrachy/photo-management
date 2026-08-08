@@ -78,6 +78,25 @@ async def test_set_title_lowercases_search_field(mock_dynamo_table):
     )
 
 
+async def test_set_cover_album_id(mock_dynamo_table):
+    await collections.set_cover_album_id("c1", "a1")
+
+    mock_dynamo_table.update_item.assert_called_once_with(
+        Key={"collection_id": "c1"},
+        UpdateExpression="SET cover_album_id = :a",
+        ExpressionAttributeValues={":a": "a1"},
+    )
+
+
+async def test_remove_cover_album_id(mock_dynamo_table):
+    await collections.remove_cover_album_id("c1")
+
+    mock_dynamo_table.update_item.assert_called_once_with(
+        Key={"collection_id": "c1"},
+        UpdateExpression="REMOVE cover_album_id",
+    )
+
+
 async def test_increment_view_count(mock_dynamo_table):
     await collections.increment_view_count("c1")
 

@@ -852,6 +852,10 @@ class SetVisibilityRequest(BaseModel):
     visibility: str
 
 
+class SetCollectionCoverRequest(BaseModel):
+    album_id: str
+
+
 @app.post("/api/collections")
 async def create_collection(
     payload: CreateCollectionRequest, _email: str = Depends(require_admin)
@@ -921,6 +925,36 @@ async def _collection_album_ids(collection_id: str) -> list[str]:
     ]
 
 
+async def _resolve_collection_cover(collection_id: str, collection: dict) -> str | None:
+    """
+    Return the photo_id to use as a collection's cover, or None.
+
+    An explicitly chosen cover album (set via the admin UI) always wins, even
+    if that album currently has no cover of its own — it does not silently
+    fall back to a different album. Otherwise falls back to the first listed
+    member album (membership order) that has a cover.
+    """
+    cover_album_id = collection.get("cover_album_id")
+    if cover_album_id:
+        album = await albums_db.get_album(cover_album_id)
+        return album.get("cover_photo_id") if album else None
+
+    memberships = await _collection_album_memberships(collection_id)
+    listed_album_ids = [
+        m["sk"].split("#", 1)[1]
+        for m in memberships
+        if m.get("visibility", "listed") == "listed"
+    ]
+    if not listed_album_ids:
+        return None
+    album_by_id = await albums_db.batch_get_albums(listed_album_ids)
+    for aid in listed_album_ids:
+        a = album_by_id.get(aid)
+        if a and a.get("cover_photo_id"):
+            return a["cover_photo_id"]
+    return None
+
+
 @app.get("/api/collections")
 async def list_collections(_email: str = Depends(require_admin)):
     items = await collections_db.list_recent_collections(COLLECTION_PAGE_LIMIT)
@@ -928,6 +962,7 @@ async def list_collections(_email: str = Depends(require_admin)):
     collections = []
     for it in items:
         share_id = await _ensure_collection_share_id(it)
+        cover_photo_id = await _resolve_collection_cover(it["collection_id"], it)
         collections.append(
             {
                 "collection_id": it["collection_id"],
@@ -935,6 +970,10 @@ async def list_collections(_email: str = Depends(require_admin)):
                 "created_at": int(it.get("created_at", 0)),
                 "view_count": int(it.get("view_count", 0)),
                 "album_count": len(await _collection_album_ids(it["collection_id"])),
+                "cover_photo_id": cover_photo_id,
+                "cover_thumb_url": (
+                    _derivative_url(cover_photo_id, "thumb") if cover_photo_id else None
+                ),
                 "share_id": share_id,
                 "public_url": collection_public_url(share_id),
             }
@@ -1009,6 +1048,9 @@ async def get_collection(
     listed_albums.sort(key=lambda c: c["event_date"] or c["created_at"], reverse=True)
     unlisted_albums.sort(key=lambda c: c["event_date"] or c["created_at"], reverse=True)
 
+    cover_album_id = item.get("cover_album_id")
+    cover_photo_id = await _resolve_collection_cover(collection_id, item)
+
     return {
         "collection_id": collection_id,
         "title": item.get("title", ""),
@@ -1016,6 +1058,11 @@ async def get_collection(
         "view_count": int(item.get("view_count", 0)),
         "share_id": share_id,
         "public_url": collection_public_url(share_id),
+        "cover_album_id": cover_album_id,
+        "cover_photo_id": cover_photo_id,
+        "cover_thumb_url": (
+            _derivative_url(cover_photo_id, "thumb") if cover_photo_id else None
+        ),
         "listed_albums": listed_albums,
         "unlisted_albums": unlisted_albums,
     }
@@ -1040,6 +1087,35 @@ async def update_collection_title(
         raise HTTPException(status_code=404, detail="Collection not found")
     await collections_db.set_title(collection_id, title)
     return {"collection_id": collection_id, "title": title}
+
+
+@app.put("/api/collections/{collection_id}/cover")
+async def set_collection_cover(
+    collection_id: str,
+    payload: SetCollectionCoverRequest,
+    _email: str = Depends(require_admin),
+):
+    collection = await collections_db.get_collection(collection_id)
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    membership = await collection_albums_db.get_membership(
+        collection_id, payload.album_id
+    )
+    if not membership:
+        raise HTTPException(status_code=400, detail="Album is not in this collection")
+
+    await collections_db.set_cover_album_id(collection_id, payload.album_id)
+    logger.info(
+        json.dumps(
+            {
+                "event": "collection_cover_set",
+                "collection_id": collection_id,
+                "cover_album_id": payload.album_id,
+            }
+        )
+    )
+    return {"collection_id": collection_id, "cover_album_id": payload.album_id}
 
 
 @app.post("/api/collections/{collection_id}/albums")
@@ -1160,6 +1236,10 @@ async def remove_album_from_collection(
         raise HTTPException(status_code=404, detail="Collection not found")
 
     await collection_albums_db.remove_membership(collection_id, album_id)
+
+    if collection.get("cover_album_id") == album_id:
+        await collections_db.remove_cover_album_id(collection_id)
+
     logger.info(
         json.dumps(
             {
@@ -1371,20 +1451,9 @@ async def _resolve_collection_share(share_id: str) -> tuple[dict, dict]:
 @app.get("/c/{share_id}", response_class=HTMLResponse)
 async def public_collection_page(share_id: str):
     _share, collection = await _resolve_collection_share(share_id)
-    cover_photo_id: str | None = None
-    collection_memberships = await _collection_album_memberships(collection["collection_id"])
-    listed_album_ids = [
-        m["sk"].split("#", 1)[1]
-        for m in collection_memberships
-        if m.get("visibility", "listed") == "listed"
-    ]
-    if listed_album_ids:
-        album_by_id = await albums_db.batch_get_albums(listed_album_ids)
-        for aid in listed_album_ids:
-            a = album_by_id.get(aid)
-            if a and a.get("cover_photo_id"):
-                cover_photo_id = a["cover_photo_id"]
-                break
+    cover_photo_id = await _resolve_collection_cover(
+        collection["collection_id"], collection
+    )
 
     head_meta = _render_public_collection_head_meta(
         share_id, collection.get("title", ""), cover_photo_id
