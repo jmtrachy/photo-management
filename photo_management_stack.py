@@ -25,16 +25,24 @@ from aws_cdk import (
 from constructs import Construct
 
 COOKIE_SECRET_SSM_PARAM = "/photo-management/cookie-secret"
-SUBDOMAIN = "photos"
 ROOT_DOMAIN = "jamestrachy.com"
-CUSTOM_DOMAIN = f"{SUBDOMAIN}.{ROOT_DOMAIN}"
 FROM_EMAIL = f"noreply@{ROOT_DOMAIN}"
 ADMIN_EMAILS = "jmtrachy@gmail.com,agentjimbo@gmail.com"
 
 
 class PhotoManagementStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        subdomain: str = "photos",
+        create_email_identity: bool = True,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
+
+        custom_domain = f"{subdomain}.{ROOT_DOMAIN}"
 
         photos_table = dynamodb.Table(
             self,
@@ -183,7 +191,7 @@ class PhotoManagementStack(Stack):
                         s3.HttpMethods.GET,
                         s3.HttpMethods.HEAD,
                     ],
-                    allowed_origins=[f"https://{CUSTOM_DOMAIN}"],
+                    allowed_origins=[f"https://{custom_domain}"],
                     allowed_headers=["*"],
                     exposed_headers=["ETag"],
                     max_age=3000,
@@ -218,10 +226,14 @@ class PhotoManagementStack(Stack):
             zone_name=zone_name,
         )
 
-        email_identity = ses.EmailIdentity(
-            self,
-            "EmailIdentity",
-            identity=ses.Identity.public_hosted_zone(zone),
+        email_identity = (
+            ses.EmailIdentity(
+                self,
+                "EmailIdentity",
+                identity=ses.Identity.public_hosted_zone(zone),
+            )
+            if create_email_identity
+            else None
         )
 
         docker_dir = os.path.dirname(__file__) or "."
@@ -254,7 +266,7 @@ class PhotoManagementStack(Stack):
                 "PHOTOS_BUCKET": photos_bucket.bucket_name,
                 "ADMIN_EMAILS": ADMIN_EMAILS,
                 "FROM_EMAIL": FROM_EMAIL,
-                "BASE_URL": f"https://{CUSTOM_DOMAIN}",
+                "BASE_URL": f"https://{custom_domain}",
             },
         )
 
@@ -345,7 +357,7 @@ class PhotoManagementStack(Stack):
         distribution = cloudfront.Distribution(
             self,
             "Distribution",
-            domain_names=[CUSTOM_DOMAIN],
+            domain_names=[custom_domain],
             certificate=cf_cert,
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.HttpOrigin(
@@ -377,14 +389,14 @@ class PhotoManagementStack(Stack):
             self,
             "AliasRecord",
             zone=zone,
-            record_name=SUBDOMAIN,
+            record_name=subdomain,
             target=route53.RecordTarget.from_alias(
                 route53_targets.CloudFrontTarget(distribution)
             ),
         )
 
         CfnOutput(self, "ApiUrl", value=api.url)
-        CfnOutput(self, "CustomUrl", value=f"https://{CUSTOM_DOMAIN}")
+        CfnOutput(self, "CustomUrl", value=f"https://{custom_domain}")
         CfnOutput(self, "PhotosBucketName", value=photos_bucket.bucket_name)
         CfnOutput(self, "PhotosTableName", value=photos_table.table_name)
         CfnOutput(self, "AlbumsTableName", value=albums_table.table_name)
@@ -393,4 +405,7 @@ class PhotoManagementStack(Stack):
         CfnOutput(self, "CollectionsTableName", value=collections_table.table_name)
         CfnOutput(self, "CollectionAlbumsTableName", value=collection_albums_table.table_name)
         CfnOutput(self, "LoginTokensTableName", value=login_tokens_table.table_name)
-        CfnOutput(self, "EmailIdentityName", value=email_identity.email_identity_name)
+        if email_identity is not None:
+            CfnOutput(
+                self, "EmailIdentityName", value=email_identity.email_identity_name
+            )

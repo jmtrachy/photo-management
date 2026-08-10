@@ -22,15 +22,24 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# CDK
+# CDK app (not needed in any Lambda image; only the Dockerfiles' COPY targets are)
 cdk.out/
 .cdk.staging/
+cdk.json
+cdk_app.py
+photo_management_stack.py
+
+# Tests / dev-only tooling
+tests/
+pytest.ini
+requirements-dev.txt
 
 # Project docs (not needed in any image)
 CLAUDE.md
 PROJECT.md
 PROJECT_RESPONSE.md
 README.md
+STAGING.md
 
 # OS junk
 Thumbs.db

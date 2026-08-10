@@ -6,12 +6,20 @@ import aws_cdk as cdk
 from photo_management_stack import PhotoManagementStack
 
 app = cdk.App()
+env = cdk.Environment(
+    account=os.environ["CDK_DEFAULT_ACCOUNT"],
+    region=os.environ["CDK_DEFAULT_REGION"],
+)
 PhotoManagementStack(
     app,
     "PhotoManagementStack",
-    env=cdk.Environment(
-        account=os.environ["CDK_DEFAULT_ACCOUNT"],
-        region=os.environ["CDK_DEFAULT_REGION"],
-    ),
+    env=env,
+)
+PhotoManagementStack(
+    app,
+    "PhotoManagementStagingStack",
+    subdomain="staging-photos",
+    create_email_identity=False,
+    env=env,
 )
 app.synth()
