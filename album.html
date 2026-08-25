@@ -875,8 +875,14 @@
       <div class="sidebar-section">
         <div class="sidebar-label">Photo order</div>
         <select id="sort-order-select" class="sidebar-filter">
-          <option value="asc">Oldest first</option>
-          <option value="desc">Newest first</option>
+          <optgroup label="Photo order">
+            <option value="asc">Oldest first</option>
+            <option value="desc">Newest first</option>
+          </optgroup>
+          <optgroup label="View by">
+            <option value="views">Most viewed</option>
+            <option value="downloads">Most downloaded</option>
+          </optgroup>
         </select>
       </div>
       <div class="sidebar-section">
@@ -982,11 +988,16 @@
     });
     const sortOrderSelect = document.getElementById("sort-order-select");
     sortOrderSelect.addEventListener("change", async () => {
+      const value = sortOrderSelect.value;
+      if (value === "views" || value === "downloads") {
+        renderGrid(value);
+        return;
+      }
       try {
         const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/sort-order`, {
           method: "PUT",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({sort_order: sortOrderSelect.value}),
+          body: JSON.stringify({sort_order: value}),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         await load();
@@ -1169,6 +1180,7 @@
     let selectionMode = false;
     const selectedIds = new Set();
     let currentCoverPhotoId = null;
+    let currentPhotos = [];
 
     const setCoverBtn = document.getElementById("set-cover-btn");
     const addToAlbumBtn = document.getElementById("add-to-album-btn");
@@ -1517,6 +1529,30 @@
       return card;
     }
 
+    function renderGrid(viewSort) {
+      let photosToRender = currentPhotos;
+      if (viewSort === "views") {
+        photosToRender = [...currentPhotos].sort(
+          (a, b) => (b.view_count ?? 0) - (a.view_count ?? 0)
+        );
+      } else if (viewSort === "downloads") {
+        photosToRender = [...currentPhotos].sort(
+          (a, b) => (b.download_count ?? 0) - (a.download_count ?? 0)
+        );
+      }
+
+      grid.innerHTML = "";
+      if (!photosToRender.length) {
+        empty.hidden = false;
+        grid.hidden = true;
+        return;
+      }
+      empty.hidden = true;
+      grid.hidden = false;
+      for (const p of photosToRender) grid.appendChild(buildPhotoCard(p));
+      updateSelectionUI();
+    }
+
     async function load() {
       try {
         const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}`);
@@ -1538,16 +1574,8 @@
         renderMeta(data);
 
         loading.hidden = true;
-        grid.innerHTML = "";
-        if (!data.photos.length) {
-          empty.hidden = false;
-          grid.hidden = true;
-          return;
-        }
-        empty.hidden = true;
-        grid.hidden = false;
-        for (const p of data.photos) grid.appendChild(buildPhotoCard(p));
-        updateSelectionUI();
+        currentPhotos = data.photos;
+        renderGrid();
       } catch (err) {
         loading.className = "error";
         loading.textContent = `Failed to load album: ${err.message}`;
