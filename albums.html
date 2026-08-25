@@ -290,6 +290,13 @@
         <input id="filter-input" class="sidebar-filter" type="search" placeholder="Filter albums…" autocomplete="off">
       </div>
       <div class="sidebar-section">
+        <select id="sort-select" class="sidebar-filter">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="views">Most viewed</option>
+        </select>
+      </div>
+      <div class="sidebar-section">
         <button id="new-album-btn" class="new-btn" type="button">New album</button>
       </div>
       <div id="status" class="status sidebar-section"></div>
@@ -375,7 +382,21 @@
     }
 
     const filterInput = document.getElementById("filter-input");
+    const sortSelect = document.getElementById("sort-select");
     let allAlbums = [];
+
+    function sortAlbums(albums) {
+      const mode = sortSelect.value;
+      const sorted = [...albums];
+      if (mode === "oldest") {
+        sorted.sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+      } else if (mode === "views") {
+        sorted.sort((a, b) => (b.view_count ?? 0) - (a.view_count ?? 0));
+      } else {
+        sorted.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+      }
+      return sorted;
+    }
 
     function renderAlbums(albums, filtering = false) {
       grid.innerHTML = "";
@@ -396,7 +417,7 @@
       const filtered = q
         ? allAlbums.filter(a => (a.title || "").toLowerCase().includes(q))
         : allAlbums;
-      renderAlbums(filtered, !!q);
+      renderAlbums(sortAlbums(filtered), !!q);
     }
 
     async function fetchAlbums() {
@@ -417,6 +438,7 @@
     }
 
     filterInput.addEventListener("input", applyFilter);
+    sortSelect.addEventListener("change", applyFilter);
 
     refreshGrid();
 
