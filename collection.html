@@ -63,6 +63,26 @@
       overflow-y: auto;
     }
     .sidebar-section { display: flex; flex-direction: column; gap: 0.2rem; }
+    .sidebar-label {
+      padding: 0 0.1rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.2rem;
+    }
+    .sidebar-filter {
+      width: 100%;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+    }
+    .sidebar-filter:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
     .nav-link {
       display: block;
       padding: 0.5rem 0.85rem;
@@ -541,6 +561,14 @@
         <a class="nav-link active" href="/collections">Collections</a>
       </nav>
       <div class="sidebar-section">
+        <div class="sidebar-label">Sort albums</div>
+        <select id="sort-select" class="sidebar-filter">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="views">Most viewed</option>
+        </select>
+      </div>
+      <div class="sidebar-section">
         <div class="add-mode">
           <button id="add-albums-btn" class="new-btn" type="button">Add albums</button>
         </div>
@@ -673,6 +701,7 @@
     const loading = document.getElementById("loading");
     const statusEl = document.getElementById("status");
     const addBtn = document.getElementById("add-albums-btn");
+    const sortSelect = document.getElementById("sort-select");
 
     const selectCountEl = document.getElementById("select-count");
     const selectSectionLabel = document.getElementById("select-section-label");
@@ -695,6 +724,8 @@
     let pickerAlbums = [];
     let pickerSelected = new Set();
     let collectionCoverAlbumId = null;
+    let currentListed = [];
+    let currentUnlisted = [];
 
     let activeSection = null;
     const selected = new Set();
@@ -831,6 +862,28 @@
       for (const a of albums) gridEl.appendChild(buildAlbumCard(a, section));
     }
 
+    function sortAlbumList(albums) {
+      const mode = sortSelect.value;
+      const sorted = [...albums];
+      if (mode === "oldest") {
+        sorted.sort(
+          (a, b) => (a.event_date || a.created_at || 0) - (b.event_date || b.created_at || 0)
+        );
+      } else if (mode === "views") {
+        sorted.sort((a, b) => (b.view_count ?? 0) - (a.view_count ?? 0));
+      } else {
+        sorted.sort(
+          (a, b) => (b.event_date || b.created_at || 0) - (a.event_date || a.created_at || 0)
+        );
+      }
+      return sorted;
+    }
+
+    function renderSections() {
+      renderSection(listedGrid, listedEmpty, listedCount, sortAlbumList(currentListed), "listed");
+      renderSection(unlistedGrid, unlistedEmpty, unlistedCount, sortAlbumList(currentUnlisted), "unlisted");
+    }
+
     async function fetchCollection() {
       const resp = await fetch(`/api/collections/${encodeURIComponent(collectionId)}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -854,6 +907,8 @@
           [...listed, ...unlisted].map(a => a.album_id)
         );
         collectionCoverAlbumId = data.cover_album_id || null;
+        currentListed = listed;
+        currentUnlisted = unlisted;
         loading.hidden = true;
         if (!listed.length && !unlisted.length) {
           empty.hidden = false;
@@ -862,13 +917,14 @@
         }
         empty.hidden = true;
         sectionsEl.hidden = false;
-        renderSection(listedGrid, listedEmpty, listedCount, listed, "listed");
-        renderSection(unlistedGrid, unlistedEmpty, unlistedCount, unlisted, "unlisted");
+        renderSections();
       } catch (err) {
         loading.textContent = `Failed to load collection: ${err.message}`;
         loading.hidden = false;
       }
     }
+
+    sortSelect.addEventListener("change", renderSections);
 
     copyUrlBtn.addEventListener("click", async () => {
       try {
