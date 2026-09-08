@@ -1,11 +1,11 @@
 # Photo Management
 
-Self-hosted photo management at `photos.jamestrachy.com`. See `PROJECT.md` for the
-product goals and `PROJECT_RESPONSE.md` for the design discussion.
+Self-hosted photo management at `photos.jamestrachy.com`. See `designs/PROJECT.md` for the
+product goals and `designs/PROJECT_RESPONSE.md` for the design discussion.
 
 ## Current scope
 
-Working features, mapped to user stories in `PROJECT.md`:
+Working features, mapped to user stories in `designs/PROJECT.md`:
 
 - **Story 1** — admin albums grid at `/albums` with cover thumbnails and per-album view counts
 - **Story 2** — recent-photos grid at `/` with date dividers and per-photo view/download counts
@@ -14,7 +14,7 @@ Working features, mapped to user stories in `PROJECT.md`:
 - **Story 6** — `POST /api/albums/{id}/shares` issues an 8-char slug at `/a/<slug>` and synchronously builds the album zip at `s3://.../zips/{share_id}.zip` so the public download is a presign-only operation; per-album share list shown in the admin album view and copyable.
 - **Story 7** — unauthenticated viewer at `/a/{share_id}` (album grid with a "Download all" button that returns the presigned zip URL and triggers the browser download) and `/a/{share_id}/{photo_id}` (full-bleed photo with translucent prev/next arrows, responsive image size — original for viewport ≥ 1024px, medium below — and a tracked "Download Full Res image" link). Album view increments `Album.view_count`; album zip download increments `Album.download_count`; per-photo view increments `Photo.view_count`; per-photo download increments `Photo.download_count`. The admin albums grid shows both album view and download counts. If the cached zip has aged out (30-day S3 lifecycle), the download endpoint rebuilds it on demand.
 
-Not yet built: Story 3's EXIF/album-list/delete pieces, Story 5 (tagging), the cost-estimator widget (PROJECT.md §"Management Console").
+Not yet built: Story 3's EXIF/album-list/delete pieces, Story 5 (tagging), the cost-estimator widget (designs/PROJECT.md §"Management Console").
 
 Supporting infrastructure:
 - Magic-link sign-in (email allowlist) via SES; session cookies signed with `itsdangerous` (30-day max-age, HttpOnly + Secure + SameSite=Lax)

@@ -2,7 +2,7 @@
 
 Self-hosted replacement for Amazon Photos at `photos.jamestrachy.com`. Albums, shareable links, view/download tracking, admin console for upload and tagging.
 
-**Status:** design phase — no code yet. `PROJECT.md` is the goals/user-stories document; `PROJECT_RESPONSE.md` is the design conversation (data model, AWS architecture, milestone plan). Read both before suggesting implementation.
+**Status:** design phase — no code yet. `designs/PROJECT.md` is the goals/user-stories document; `designs/PROJECT_RESPONSE.md` is the design conversation (data model, AWS architecture, milestone plan). Read both before suggesting implementation. Other living design docs — `designs/STAGING.md`, `designs/MULTITENANT.md`, `designs/POSTGRES.md`, `designs/FEATURES.md`, `designs/STATS.md` — capture in-progress or future-work architecture; read on demand when relevant.
 
 ## Sibling projects on the same platform
 
@@ -14,7 +14,7 @@ This app slots into the existing `jamestrachy.com` platform. Three sibling repos
   - `/platform/wildcard-cert-arn`
   - Key files: `platform_stack.py`, `cdk_app.py`
 
-- **`../url-shortener`** — `l.jamestrachy.com`. POST `/generate` → 6-char ID, GET `/u/{id}` → 302 with `hit_count` increment. The photo app's share-link click tracking will integrate with this (see PROJECT_RESPONSE.md §5).
+- **`../url-shortener`** — `l.jamestrachy.com`. POST `/generate` → 6-char ID, GET `/u/{id}` → 302 with `hit_count` increment. The photo app's share-link click tracking will integrate with this (see designs/PROJECT_RESPONSE.md §5).
   - Key files: `app.py` (FastAPI handler), `url_shortener_stack.py` (CDK), `cdk_app.py`, `Dockerfile`
 
 - **`../qr-code`** — `qrcode.jamestrachy.com`. QR generator + scan-tracking redirect. Same shape as url-shortener, plus an S3 bucket served via a `/qrs/*` CloudFront behavior. Calls url-shortener over HTTP — example of cross-app integration.
