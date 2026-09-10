@@ -178,6 +178,37 @@ class PhotoManagementStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # Logical id deliberately bumped to "V2" (rather than editing the
+        # "AlbumStatsTable" resource in place) to force CloudFormation to
+        # replace the whole table — delete the old one, create a fresh one —
+        # instead of an in-place GSI swap that would leave the old
+        # (date, album)-counter rows sitting unindexed alongside new-format
+        # rows. See designs/STATS.md: the old rows are low-volume and not
+        # worth migrating, so a clean replacement is simpler than a
+        # coexistence period.
+        album_stats_table = dynamodb.Table(
+            self,
+            "AlbumStatsTableV2",
+            partition_key=dynamodb.Attribute(
+                name="pk", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="sk", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        album_stats_table.add_global_secondary_index(
+            index_name="ByAlbum",
+            partition_key=dynamodb.Attribute(
+                name="album_id", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="ts", type=dynamodb.AttributeType.NUMBER
+            ),
+        )
+
         photos_bucket = s3.Bucket(
             self,
             "PhotosBucket",
@@ -263,6 +294,7 @@ class PhotoManagementStack(Stack):
                 "SHARES_TABLE": shares_table.table_name,
                 "COLLECTIONS_TABLE": collections_table.table_name,
                 "COLLECTION_ALBUMS_TABLE": collection_albums_table.table_name,
+                "ALBUM_STATS_TABLE": album_stats_table.table_name,
                 "PHOTOS_BUCKET": photos_bucket.bucket_name,
                 "ADMIN_EMAILS": ADMIN_EMAILS,
                 "FROM_EMAIL": FROM_EMAIL,
@@ -277,6 +309,7 @@ class PhotoManagementStack(Stack):
         shares_table.grant_read_write_data(fn)
         collections_table.grant_read_write_data(fn)
         collection_albums_table.grant_read_write_data(fn)
+        album_stats_table.grant_read_write_data(fn)
         photos_bucket.grant_read_write(fn)
 
         derivatives_fn = _lambda.DockerImageFunction(
