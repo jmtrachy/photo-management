@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mangum import Mangum
 from pydantic import BaseModel
+from database import album_stats as album_stats_db
 from database import albums as albums_db
 from database import collection_albums as collection_albums_db
 from database import collections as collections_db
@@ -1528,6 +1529,7 @@ async def increment_public_album_view(share_id: str):
         raise HTTPException(status_code=404, detail="Share not found")
     album_id = share["album_id"]
     await albums_db.increment_view_count(album_id)
+    await album_stats_db.increment_view_count(album_id, int(time.time()))
     logger.info(
         json.dumps(
             {
@@ -1693,6 +1695,7 @@ async def download_public_album(share_id: str):
         return JSONResponse({"status": "pending"}, status_code=202)
 
     await albums_db.increment_download_count(album_id)
+    await album_stats_db.increment_download_count(album_id, int(time.time()))
 
     filename = f"{_sanitize_zip_filename(album.get('title', '') or 'album')}.zip"
     download_url = s3_client.generate_presigned_url(
