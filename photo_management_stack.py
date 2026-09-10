@@ -178,9 +178,17 @@ class PhotoManagementStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # Logical id deliberately bumped to "V2" (rather than editing the
+        # "AlbumStatsTable" resource in place) to force CloudFormation to
+        # replace the whole table — delete the old one, create a fresh one —
+        # instead of an in-place GSI swap that would leave the old
+        # (date, album)-counter rows sitting unindexed alongside new-format
+        # rows. See designs/STATS.md: the old rows are low-volume and not
+        # worth migrating, so a clean replacement is simpler than a
+        # coexistence period.
         album_stats_table = dynamodb.Table(
             self,
-            "AlbumStatsTable",
+            "AlbumStatsTableV2",
             partition_key=dynamodb.Attribute(
                 name="pk", type=dynamodb.AttributeType.STRING
             ),
@@ -194,10 +202,10 @@ class PhotoManagementStack(Stack):
         album_stats_table.add_global_secondary_index(
             index_name="ByAlbum",
             partition_key=dynamodb.Attribute(
-                name="sk", type=dynamodb.AttributeType.STRING
+                name="album_id", type=dynamodb.AttributeType.STRING
             ),
             sort_key=dynamodb.Attribute(
-                name="pk", type=dynamodb.AttributeType.STRING
+                name="ts", type=dynamodb.AttributeType.NUMBER
             ),
         )
 
