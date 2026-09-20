@@ -840,6 +840,59 @@ async def reset_album_counts(album_id: str, _email: str = Depends(require_admin)
     return {"album_id": album_id, "photos_reset": len(photo_ids)}
 
 
+@app.delete("/api/albums/{album_id}")
+async def delete_album(album_id: str, _email: str = Depends(require_admin)):
+    """Permanently delete an album: every share (and its S3 zip), its
+    membership in any collection (clearing that collection's cover if it
+    pointed here), and every photo's membership in this album. Does not touch
+    the photos themselves — they're independent records that may belong to
+    other albums. Unrecoverable."""
+    album = await albums_db.get_album(album_id)
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    # Resolve everything that references this album up front, before mutating.
+    photo_ids = await memberships_db.list_album_photo_ids(album_id)
+    album_shares = [
+        s for s in await shares.scan_album_shares(album_id) if _is_album_share(s)
+    ]
+    collection_rows = await collection_albums_db.list_album_collections(album_id)
+
+    # 1. Remove this album's membership from every collection, clearing that
+    #    collection's cover if it pointed here.
+    for row in collection_rows:
+        collection_id = row["pk"].split("#", 1)[1]
+        await collection_albums_db.remove_membership(collection_id, album_id)
+        collection = await collections_db.get_collection(collection_id)
+        if collection and collection.get("cover_album_id") == album_id:
+            await collections_db.remove_cover_album_id(collection_id)
+
+    # 2. Delete every share on this album, and its S3 zip if one was built.
+    for s in album_shares:
+        s3_client.delete_object(Bucket=PHOTOS_BUCKET, Key=_share_zip_key(s["share_id"]))
+        await shares.delete_share(s["share_id"])
+
+    # 3. Remove every photo's membership in this album (the photos themselves
+    #    are untouched — they may belong to other albums, or none).
+    await memberships_db.remove_memberships([(album_id, pid) for pid in photo_ids])
+
+    # 4. Delete the album record itself.
+    await albums_db.delete_album(album_id)
+
+    logger.info(
+        json.dumps(
+            {
+                "event": "album_deleted",
+                "album_id": album_id,
+                "photo_memberships_removed": len(photo_ids),
+                "shares_removed": len(album_shares),
+                "collections_affected": len(collection_rows),
+            }
+        )
+    )
+    return {"album_id": album_id}
+
+
 class CreateCollectionRequest(BaseModel):
     title: str
 

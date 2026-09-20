@@ -90,6 +90,13 @@ async def test_create_collection_share_puts_with_condition():
     )
 
 
+async def test_delete_share():
+    with patch.object(shares, "shares_table") as mock_table:
+        await shares.delete_share("abc123")
+
+    mock_table.delete_item.assert_called_once_with(Key={"share_id": "abc123"})
+
+
 async def test_mark_zip_pending():
     with patch.object(shares, "shares_table") as mock_table:
         await shares.mark_zip_pending("abc123")

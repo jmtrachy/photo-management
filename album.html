@@ -796,6 +796,18 @@
     </div>
   </div>
 
+  <div id="delete-album-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="delete-album-modal-title">
+    <div class="modal">
+      <h2 id="delete-album-modal-title">Delete album</h2>
+      <p class="modal-body">This deletes the album, its share links, and any zip downloads. The photos themselves are not deleted — they stay on the site and in any other album they belong to. This is unrecoverable, are you sure you wish to proceed?</p>
+      <div id="delete-album-modal-error" class="modal-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="delete-album-no-btn">Cancel</button>
+        <button type="button" class="submit danger" id="delete-album-yes-btn">Delete album</button>
+      </div>
+    </div>
+  </div>
+
   <div id="routing-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="routing-modal-title">
     <div class="modal routing-modal">
       <h2 id="routing-modal-title">Upload results</h2>
@@ -888,6 +900,9 @@
       <div class="sidebar-section">
         <div class="sidebar-label">Stats</div>
         <div id="album-meta" class="album-stats"></div>
+      </div>
+      <div class="sidebar-section">
+        <button id="delete-album-btn" class="danger-btn" type="button">Delete album</button>
       </div>
       <div id="status" class="status sidebar-section"></div>
     </aside>
@@ -1125,6 +1140,7 @@
       if (resetBackdrop.classList.contains("visible")) closeResetModal();
       else if (removeBackdrop.classList.contains("visible")) closeRemoveModal();
       else if (deleteBackdrop.classList.contains("visible")) closeDeleteModal();
+      else if (deleteAlbumBackdrop.classList.contains("visible")) closeDeleteAlbumModal();
       else if (albumPickerBackdrop.classList.contains("visible")) closeAlbumPicker();
       else if (routingBackdrop.classList.contains("visible")) closeResultsModal();
       else if (selectionMode) exitSelectionMode();
@@ -1469,6 +1485,51 @@
         deleteErrorEl.textContent = err.message;
         deleteYesBtn.disabled = false;
         deleteNoBtn.disabled = false;
+      }
+    });
+
+    const deleteAlbumBtn = document.getElementById("delete-album-btn");
+    const deleteAlbumBackdrop = document.getElementById("delete-album-modal-backdrop");
+    const deleteAlbumYesBtn = document.getElementById("delete-album-yes-btn");
+    const deleteAlbumNoBtn = document.getElementById("delete-album-no-btn");
+    const deleteAlbumErrorEl = document.getElementById("delete-album-modal-error");
+
+    function openDeleteAlbumModal() {
+      deleteAlbumErrorEl.textContent = "";
+      deleteAlbumYesBtn.disabled = false;
+      deleteAlbumNoBtn.disabled = false;
+      deleteAlbumBackdrop.classList.add("visible");
+      deleteAlbumNoBtn.focus();
+    }
+    function closeDeleteAlbumModal() {
+      deleteAlbumBackdrop.classList.remove("visible");
+    }
+    deleteAlbumBtn.addEventListener("click", openDeleteAlbumModal);
+    deleteAlbumNoBtn.addEventListener("click", closeDeleteAlbumModal);
+    deleteAlbumBackdrop.addEventListener("click", (e) => {
+      if (e.target === deleteAlbumBackdrop) closeDeleteAlbumModal();
+    });
+    deleteAlbumYesBtn.addEventListener("click", async () => {
+      deleteAlbumYesBtn.disabled = true;
+      deleteAlbumNoBtn.disabled = true;
+      deleteAlbumErrorEl.textContent = "";
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}`, {
+          method: "DELETE",
+        });
+        if (!resp.ok) {
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const data = await resp.json();
+            if (data.detail) detail = data.detail;
+          } catch (_e) {}
+          throw new Error(detail);
+        }
+        location.href = "/albums";
+      } catch (err) {
+        deleteAlbumErrorEl.textContent = err.message;
+        deleteAlbumYesBtn.disabled = false;
+        deleteAlbumNoBtn.disabled = false;
       }
     });
 

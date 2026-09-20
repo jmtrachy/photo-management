@@ -25,6 +25,14 @@ async def create_album(item: dict) -> None:
     albums_table.put_item(Item=item)
 
 
+async def delete_album(album_id: str) -> None:
+    """
+    Delete an album record. Does not touch its photos, memberships, shares,
+    or collection memberships — the caller is responsible for that cleanup.
+    """
+    albums_table.delete_item(Key={"album_id": album_id})
+
+
 async def list_recent_albums(limit: int) -> list[dict]:
     """
     Return the most recently created albums (newest first) via the ByCreatedAt
