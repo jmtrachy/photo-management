@@ -96,6 +96,11 @@ async def create_collection_share(
     )
 
 
+async def delete_share(share_id: str) -> None:
+    """Delete a share record. Does not touch its S3 zip — the caller is responsible for that."""
+    shares_table.delete_item(Key={"share_id": share_id})
+
+
 async def mark_zip_pending(share_id: str) -> None:
     """
     Mark a share's downloadable zip as pending (re)build, clearing any prior error.

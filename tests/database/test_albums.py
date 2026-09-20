@@ -33,6 +33,12 @@ async def test_create_album_puts_item(mock_dynamo_table):
     mock_dynamo_table.put_item.assert_called_once_with(Item=item)
 
 
+async def test_delete_album(mock_dynamo_table):
+    await albums.delete_album("a1")
+
+    mock_dynamo_table.delete_item.assert_called_once_with(Key={"album_id": "a1"})
+
+
 async def test_list_recent_albums_queries_by_created_at(mock_dynamo_table):
     items = [{"album_id": "a1"}, {"album_id": "a2"}]
     mock_dynamo_table.query.return_value = {"Items": items}
