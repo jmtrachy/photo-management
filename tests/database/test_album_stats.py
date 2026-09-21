@@ -97,6 +97,19 @@ async def test_get_history_uses_by_album_index():
 
 
 @pytest.mark.asyncio
+async def test_get_history_with_range_adds_ts_condition():
+    with patch.object(album_stats, "album_stats_table") as mock_table:
+        mock_table.query.return_value = {"Items": []}
+
+        await album_stats.get_history("trip", start_ts=100, end_ts=200)
+
+    _, kwargs = mock_table.query.call_args
+    assert kwargs["KeyConditionExpression"] == (
+        Key("album_id").eq("trip") & Key("ts").between(100, 200)
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_history_follows_pagination():
     with patch.object(album_stats, "album_stats_table") as mock_table:
         mock_table.query.side_effect = [

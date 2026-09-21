@@ -389,6 +389,59 @@ async def get_album(album_id: str, _email: str = Depends(require_admin)):
     }
 
 
+_STATS_WINDOWS = {
+    "24h": (24, 3600),
+    "7d": (28, 6 * 3600),
+    "30d": (30, 86400),
+}
+
+
+def _bucket_views(
+    events: list[dict], start: int, num_buckets: int, bucket_seconds: int
+) -> list[dict]:
+    """Count 'view' events into num_buckets fixed-width buckets starting at start."""
+    counts = [0] * num_buckets
+    for e in events:
+        if e.get("event_type") != "view":
+            continue
+        idx = (int(e["ts"]) - start) // bucket_seconds
+        if 0 <= idx < num_buckets:
+            counts[idx] += 1
+    return [
+        {"start": start + i * bucket_seconds, "views": counts[i]}
+        for i in range(num_buckets)
+    ]
+
+
+@app.get("/api/albums/{album_id}/stats")
+async def get_album_stats(
+    album_id: str, window: str = "24h", _email: str = Depends(require_admin)
+):
+    """
+    View counts for an album, bucketed into a rolling window ending now: 24
+    hourly buckets (window=24h), 28 six-hourly buckets covering the last
+    week (window=7d), or 30 daily buckets (window=30d). Bucket boundaries
+    are returned as epoch seconds — the caller renders them in whatever
+    timezone it's displayed in.
+    """
+    if window not in _STATS_WINDOWS:
+        raise HTTPException(
+            status_code=400, detail="window must be '24h', '7d', or '30d'"
+        )
+    album = await albums_db.get_album(album_id)
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    num_buckets, bucket_seconds = _STATS_WINDOWS[window]
+    end = int(time.time())
+    start = end - num_buckets * bucket_seconds
+    events = await album_stats_db.get_history(album_id, start_ts=start, end_ts=end)
+    return {
+        "window": window,
+        "buckets": _bucket_views(events, start, num_buckets, bucket_seconds),
+    }
+
+
 @app.post("/api/albums")
 async def create_album(
     payload: CreateAlbumRequest, _email: str = Depends(require_admin)

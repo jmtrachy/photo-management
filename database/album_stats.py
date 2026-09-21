@@ -79,21 +79,30 @@ async def get_stats_for_date(date: str) -> list[dict]:
     return rows
 
 
-async def get_history(album_id: str) -> list[dict]:
+async def get_history(
+    album_id: str, *, start_ts: int | None = None, end_ts: int | None = None
+) -> list[dict]:
     """
-    Return every view/download event for one album across all time, via the
-    ByAlbum index (oldest-first, since ts is the GSI's sort key). Follows
-    pagination to completion.
+    Return an album's view/download events, via the ByAlbum index (oldest-
+    first, since ts is the GSI's sort key). Follows pagination to completion.
 
     :param album_id: The album to fetch
+    :param start_ts: Optional inclusive lower bound (epoch seconds). Must be
+        given together with end_ts.
+    :param end_ts: Optional inclusive upper bound (epoch seconds). Must be
+        given together with start_ts.
     :return: Raw event rows (album_id, event_type, ts, ...), oldest-first
     """
+    key_condition = Key("album_id").eq(album_id)
+    if start_ts is not None and end_ts is not None:
+        key_condition &= Key("ts").between(start_ts, end_ts)
+
     rows: list[dict] = []
     last_key = None
     while True:
         kw: dict = {
             "IndexName": "ByAlbum",
-            "KeyConditionExpression": Key("album_id").eq(album_id),
+            "KeyConditionExpression": key_condition,
         }
         if last_key:
             kw["ExclusiveStartKey"] = last_key

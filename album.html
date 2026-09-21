@@ -120,8 +120,20 @@
       padding: 0 0.1rem;
     }
     .album-stat-line { display: block; }
+    .graph-link {
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      font-family: inherit;
+      font-size: inherit;
+    }
+    .graph-link:hover { text-decoration: underline; }
+    .dragons-section { margin-top: 1.25rem; }
     .reset-link {
-      margin-top: 0.35rem;
+      margin-bottom: 0.15rem;
       color: #b03030;
       font-size: 0.8rem;
       text-decoration: none;
@@ -265,6 +277,12 @@
       color: var(--muted);
       margin-bottom: 0.75rem;
     }
+    .stats-chart-unit {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-style: italic;
+      margin: -0.5rem 0 0.5rem;
+    }
     .routing-section {
       margin-bottom: 0.75rem;
     }
@@ -301,6 +319,69 @@
       background: var(--accent);
       border-color: var(--accent);
       color: white;
+    }
+    .stats-chart {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0 0.25rem;
+    }
+    .stats-yaxis {
+      position: relative;
+      width: 28px;
+      height: 220px;
+      flex-shrink: 0;
+    }
+    .stats-yaxis-tick {
+      position: absolute;
+      right: 4px;
+      left: 0;
+      text-align: right;
+      font-size: 0.65rem;
+      color: var(--muted);
+      transform: translateY(-50%);
+    }
+    .stats-bars-wrap {
+      flex: 1;
+      min-width: 0;
+    }
+    .stats-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 220px;
+      border-bottom: 1px solid var(--border);
+    }
+    .stats-bar-col {
+      flex: 1;
+      display: flex;
+      align-items: flex-end;
+      height: 100%;
+      min-width: 0;
+    }
+    .stats-bar {
+      width: 100%;
+      background: var(--accent);
+      border-radius: 2px 2px 0 0;
+      min-height: 1px;
+    }
+    .stats-bar:hover {
+      filter: brightness(1.1);
+    }
+    .stats-labels {
+      display: flex;
+      gap: 2px;
+    }
+    .stats-label-col {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      justify-content: center;
+    }
+    .stats-bar-label {
+      margin-top: 0.3rem;
+      font-size: 0.65rem;
+      color: var(--muted);
+      white-space: nowrap;
     }
     .routing-audit-list {
       list-style: none;
@@ -808,6 +889,25 @@
     </div>
   </div>
 
+  <div id="stats-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="stats-modal-title">
+    <div class="modal routing-modal">
+      <h2 id="stats-modal-title">Views over time</h2>
+      <div class="routing-filters">
+        <button type="button" class="routing-filter-chip active" data-window="24h">Last 24 hours</button>
+        <button type="button" class="routing-filter-chip" data-window="7d">Last week</button>
+        <button type="button" class="routing-filter-chip" data-window="30d">Last 30 days</button>
+      </div>
+      <div id="stats-chart-summary" class="routing-modal-summary"></div>
+      <div id="stats-chart-unit" class="stats-chart-unit"></div>
+      <div id="stats-chart-loading" class="modal-loading">Loading…</div>
+      <div id="stats-chart-error" class="modal-error"></div>
+      <div id="stats-chart" class="stats-chart" hidden></div>
+      <div class="modal-actions">
+        <button type="button" class="cancel" id="stats-modal-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="routing-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="routing-modal-title">
     <div class="modal routing-modal">
       <h2 id="routing-modal-title">Upload results</h2>
@@ -901,8 +1001,10 @@
         <div class="sidebar-label">Stats</div>
         <div id="album-meta" class="album-stats"></div>
       </div>
-      <div class="sidebar-section">
-        <button id="delete-album-btn" class="danger-btn" type="button">Delete album</button>
+      <div class="sidebar-section dragons-section">
+        <div class="sidebar-label">Dragons below</div>
+        <button id="reset-counts-btn" class="reset-link" type="button">Reset counts</button>
+        <button id="delete-album-btn" class="reset-link" type="button">Delete album</button>
       </div>
       <div id="status" class="status sidebar-section"></div>
     </aside>
@@ -1021,10 +1123,12 @@
         setTimeout(() => { statusEl.textContent = ""; }, 4000);
       }
     });
+    const resetCountsBtn = document.getElementById("reset-counts-btn");
     const resetBackdrop = document.getElementById("reset-modal-backdrop");
     const resetYesBtn = document.getElementById("reset-yes-btn");
     const resetNoBtn = document.getElementById("reset-no-btn");
     const resetErrorEl = document.getElementById("reset-modal-error");
+    resetCountsBtn.addEventListener("click", openResetModal);
 
     function renderChips() {
       chipListEl.innerHTML = "";
@@ -1100,23 +1204,26 @@
 
     function renderMeta(data) {
       metaEl.innerHTML = "";
-      const lines = [
-        pluralize(data.photos.length, "photo"),
-        pluralize(data.view_count ?? 0, "view"),
-        pluralize(data.download_count ?? 0, "download"),
-      ];
-      for (const line of lines) {
-        const span = document.createElement("span");
-        span.className = "album-stat-line";
-        span.textContent = line;
-        metaEl.appendChild(span);
-      }
-      const reset = document.createElement("button");
-      reset.type = "button";
-      reset.className = "reset-link";
-      reset.textContent = "Reset counts";
-      reset.addEventListener("click", openResetModal);
-      metaEl.appendChild(reset);
+
+      const photosLine = document.createElement("span");
+      photosLine.className = "album-stat-line";
+      photosLine.textContent = pluralize(data.photos.length, "photo");
+      metaEl.appendChild(photosLine);
+
+      const viewsLine = document.createElement("span");
+      viewsLine.className = "album-stat-line";
+      const graphLink = document.createElement("button");
+      graphLink.type = "button";
+      graphLink.className = "graph-link";
+      graphLink.textContent = pluralize(data.view_count ?? 0, "view");
+      graphLink.addEventListener("click", openStatsModal);
+      viewsLine.appendChild(graphLink);
+      metaEl.appendChild(viewsLine);
+
+      const downloadsLine = document.createElement("span");
+      downloadsLine.className = "album-stat-line";
+      downloadsLine.textContent = pluralize(data.download_count ?? 0, "download");
+      metaEl.appendChild(downloadsLine);
     }
 
     const COPY_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="8" height="9" rx="1"/><path d="M5.5 4.5V3.5C5.5 2.94772 5.94772 2.5 6.5 2.5H12.5C13.0523 2.5 13.5 2.94772 13.5 3.5V10.5C13.5 11.0523 13.0523 11 12.5 11H10.5"/></svg>';
@@ -1141,6 +1248,7 @@
       else if (removeBackdrop.classList.contains("visible")) closeRemoveModal();
       else if (deleteBackdrop.classList.contains("visible")) closeDeleteModal();
       else if (deleteAlbumBackdrop.classList.contains("visible")) closeDeleteAlbumModal();
+      else if (statsBackdrop.classList.contains("visible")) closeStatsModal();
       else if (albumPickerBackdrop.classList.contains("visible")) closeAlbumPicker();
       else if (routingBackdrop.classList.contains("visible")) closeResultsModal();
       else if (selectionMode) exitSelectionMode();
@@ -1532,6 +1640,137 @@
         deleteAlbumNoBtn.disabled = false;
       }
     });
+
+    const statsBackdrop = document.getElementById("stats-modal-backdrop");
+    const statsCloseBtn = document.getElementById("stats-modal-close-btn");
+    const statsChips = document.querySelectorAll("#stats-modal-backdrop .routing-filter-chip");
+    const statsChartEl = document.getElementById("stats-chart");
+    const statsLoadingEl = document.getElementById("stats-chart-loading");
+    const statsErrorEl = document.getElementById("stats-chart-error");
+    const statsSummaryEl = document.getElementById("stats-chart-summary");
+    const statsUnitEl = document.getElementById("stats-chart-unit");
+    let statsWindow = "24h";
+
+    function closeStatsModal() {
+      statsBackdrop.classList.remove("visible");
+    }
+    function openStatsModal() {
+      statsBackdrop.classList.add("visible");
+      loadStats();
+    }
+    statsCloseBtn.addEventListener("click", closeStatsModal);
+    statsBackdrop.addEventListener("click", (e) => {
+      if (e.target === statsBackdrop) closeStatsModal();
+    });
+    statsChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        statsChips.forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+        statsWindow = chip.dataset.window;
+        loadStats();
+      });
+    });
+
+    async function loadStats() {
+      statsChartEl.hidden = true;
+      statsErrorEl.textContent = "";
+      statsSummaryEl.textContent = "";
+      statsUnitEl.textContent = "";
+      statsLoadingEl.hidden = false;
+      try {
+        const resp = await fetch(
+          `/api/albums/${encodeURIComponent(albumId)}/stats?window=${statsWindow}`
+        );
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        renderStatsChart(data.buckets, statsWindow);
+      } catch (err) {
+        statsErrorEl.textContent = err.message;
+      } finally {
+        statsLoadingEl.hidden = true;
+      }
+    }
+
+    const STATS_WINDOW_CONFIG = {
+      "24h": {label: "last 24 hours", unit: "Views per hour", labelEvery: 4, granularity: "hour"},
+      "7d": {label: "last week", unit: "Views per 6 hours", labelEvery: 4, granularity: "6hour"},
+      "30d": {label: "last 30 days", unit: "Views per day", labelEvery: 5, granularity: "day"},
+    };
+
+    function renderStatsChart(buckets, windowKey) {
+      const config = STATS_WINDOW_CONFIG[windowKey];
+      const total = buckets.reduce((sum, b) => sum + b.views, 0);
+      statsSummaryEl.textContent = `${total} view${total === 1 ? "" : "s"} in the ${config.label}`;
+      statsUnitEl.textContent = config.unit;
+
+      const max = Math.max(1, ...buckets.map((b) => b.views));
+      const labelEvery = config.labelEvery;
+      const bucketSeconds = buckets.length > 1 ? buckets[1].start - buckets[0].start : 3600;
+      const lastIndex = buckets.length - 1;
+      statsChartEl.innerHTML = "";
+
+      const yaxis = document.createElement("div");
+      yaxis.className = "stats-yaxis";
+      [
+        {value: max, top: 0},
+        {value: Math.round(max / 2), top: 50},
+        {value: 0, top: 100},
+      ].forEach(({value, top}) => {
+        const tick = document.createElement("div");
+        tick.className = "stats-yaxis-tick";
+        tick.style.top = `${top}%`;
+        tick.textContent = value;
+        yaxis.appendChild(tick);
+      });
+      statsChartEl.appendChild(yaxis);
+
+      const barsWrap = document.createElement("div");
+      barsWrap.className = "stats-bars-wrap";
+      const barsRow = document.createElement("div");
+      barsRow.className = "stats-bars";
+      const labelsRow = document.createElement("div");
+      labelsRow.className = "stats-labels";
+
+      buckets.forEach((b, i) => {
+        const barCol = document.createElement("div");
+        barCol.className = "stats-bar-col";
+        const bar = document.createElement("div");
+        bar.className = "stats-bar";
+        bar.style.height = `${(b.views / max) * 100}%`;
+        const d = new Date(b.start * 1000);
+        const dateLabel = d.toLocaleDateString([], {month: "short", day: "numeric"});
+        const fmtHour = (dt) =>
+          dt.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
+        const hourRange = () => {
+          const end = new Date((b.start + bucketSeconds) * 1000);
+          return `${fmtHour(d)}–${fmtHour(end)}`;
+        };
+        const tooltipLabel = {
+          hour: hourRange,
+          "6hour": () => `${dateLabel}, ${hourRange()}`,
+          day: () => dateLabel,
+        }[config.granularity]();
+        bar.title = `${tooltipLabel}: ${b.views} view${b.views === 1 ? "" : "s"}`;
+        barCol.appendChild(bar);
+        barsRow.appendChild(barCol);
+
+        const labelCol = document.createElement("div");
+        labelCol.className = "stats-label-col";
+        if (i % labelEvery === 0 || i === lastIndex) {
+          const label = document.createElement("div");
+          label.className = "stats-bar-label";
+          label.textContent =
+            config.granularity === "hour" ? d.toLocaleTimeString([], {hour: "numeric"}) : dateLabel;
+          labelCol.appendChild(label);
+        }
+        labelsRow.appendChild(labelCol);
+      });
+
+      barsWrap.appendChild(barsRow);
+      barsWrap.appendChild(labelsRow);
+      statsChartEl.appendChild(barsWrap);
+      statsChartEl.hidden = false;
+    }
 
     function buildPhotoCard(photo) {
       const card = document.createElement("a");
